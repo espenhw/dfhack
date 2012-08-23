@@ -1,6 +1,5 @@
 // This tool display dfhack version on df screen
 
-#include <Windows.h>
 #include <iostream>
 #include <vector>
 #include <map>
@@ -15,7 +14,7 @@ using namespace std;
 #include "modules/Gui.h"
 using namespace DFHack;
 
-DFhackCExport command_result df_versionosd (Core * c, vector <string> & parameters);
+command_result df_versionosd (color_ostream &out, vector <string> & parameters);
 static DFSDL_Surface* (*_IMG_LoadPNG_RW)(void* src) = 0;
 static vPtr (*_SDL_RWFromFile)(const char* file, const char *mode) = 0;
 static int (*_SDL_SetAlpha)(vPtr surface, uint32_t flag, uint8_t alpha) = 0;
@@ -29,10 +28,7 @@ DFTileSurface* tiles[10];
 char* file = "Cooz_curses_square_16x16.png";
 Gui* gui;
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "versionosd";
-}
+DFHACK_PLUGIN("versionosd");
 
 DFTileSurface* createTile(int x, int y)
 {
@@ -48,9 +44,8 @@ DFTileSurface* createTile(int x, int y)
     return tile;
 }
 
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("versionosd",
                                      "Toggles displaying version in DF window",
                                      df_versionosd));
@@ -69,7 +64,7 @@ DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand>
 
     if ( !surface )
     {
-        c->con.print("Couldnt load image from file %s", file);
+        out.print("Couldnt load image from file %s", file);
         return CR_FAILURE;
     }
 
@@ -102,7 +97,7 @@ DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand>
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     Graphic* g = c->getGraphic();
     g->Unregister(gettile);
@@ -117,12 +112,11 @@ DFhackCExport command_result plugin_shutdown ( Core * c )
     return CR_OK;
 }
 
-DFhackCExport command_result df_versionosd (Core * c, vector <string> & parameters)
+command_result df_versionosd (color_ostream &out, vector <string> & parameters)
 {
     On = !On;
-    c->Suspend();
-    c->con.print("Version OSD is %s\n", On ? "On" : "Off");
-    c->Resume();
+    CoreSuspender suspend;
+    out.print("Version OSD is %s\n", On ? "On" : "Off");
     return CR_OK;
 }
 

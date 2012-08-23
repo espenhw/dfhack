@@ -10,67 +10,56 @@
 using std::vector;
 using std::string;
 using namespace DFHack;
-using namespace DFHack::Simple;
 
-DFhackCExport command_result colonies (Core * c, vector <string> & parameters);
+command_result colonies (color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
+DFHACK_PLUGIN("colonies");
+
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "colonies";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
-    commands.push_back(PluginCommand("colonies",
-        "List or change wild colonies (ants hills and such)",
-        colonies));
+    commands.push_back(PluginCommand(
+        "colonies", "List or change wild colonies (ants hills and such)",
+        colonies, false,
+        "  Without any options, this command lists all the vermin colonies present.\n"
+        "Options:\n"
+        //"  kill   - destroy colonies\n" // unlisted because it's likely broken anyway
+        "  bees   - turn colonies into honey bee hives\n"
+    ));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
 void destroyColonies();
 void convertColonies(Materials *Materials);
-void showColonies(Core *c, Materials *Materials);
+void showColonies(color_ostream &out, Materials *Materials);
 
-DFhackCExport command_result colonies (Core * c, vector <string> & parameters)
+command_result colonies (color_ostream &out, vector <string> & parameters)
 {
     bool destroy = false;
     bool convert = false;
-    bool help = false;
 
-    for(int i = 0; i < parameters.size();i++)
+    for(size_t i = 0; i < parameters.size();i++)
     {
         if(parameters[i] == "kill")
             destroy = true;
         else if(parameters[i] == "bees")
             convert = true;
-        else if(parameters[i] == "help" || parameters[i] == "?")
-        {
-            help = true;
-        }
-    }
-    if(help)
-    {
-        c->con.print("Without any options, this command lists all the vermin colonies present.\n"
-            "Options:\n"
-            "kill   - destroy colonies\n"
-            "bees   - turn colonies into honey bees\n"
-            );
-        return CR_OK;
+        else
+            return CR_WRONG_USAGE;
     }
     if (destroy && convert)
     {
-        c->con.printerr("Kill or make bees? DECIDE!\n");
+        out.printerr("Kill or make bees? DECIDE!\n");
         return CR_FAILURE;
     }
-    CoreSuspender suspend(c);
 
-    Materials * materials = c->getMaterials();
+    CoreSuspender suspend;
+
+    Materials * materials = Core::getInstance().getMaterials();
 
     materials->ReadCreatureTypesEx();
 
@@ -79,7 +68,7 @@ DFhackCExport command_result colonies (Core * c, vector <string> & parameters)
     else if (convert)
         convertColonies(materials);
     else
-        showColonies(c, materials);
+        showColonies(out, materials);
 
     materials->Finish();
 
@@ -136,7 +125,7 @@ void convertColonies(Materials *Materials)
     }
 }
 
-void showColonies(Core *c, Materials *Materials)
+void showColonies(color_ostream &out, Materials *Materials)
 {
     uint32_t numSpawnPoints = Vermin::getNumVermin();
     int      numColonies    = 0;
@@ -153,11 +142,11 @@ void showColonies(Core *c, Materials *Materials)
             if(sp.race != -1)
                 race = Materials->raceEx[sp.race].id;
 
-            c->con.print("Colony %u: %s at %d:%d:%d\n", i,
-                race.c_str(), sp.x, sp.y, sp.z);
+            out.print("Colony %u: %s at %d:%d:%d\n", i,
+                      race.c_str(), sp.x, sp.y, sp.z);
         }
     }
 
     if (numColonies == 0)
-        c->con << "No colonies present." << std::endl;
+        out << "No colonies present." << std::endl;
 }

@@ -40,8 +40,6 @@ distribution.
 
 namespace DFHack
 {
-namespace Simple
-{
 namespace Kitchen
 {
 typedef uint8_t t_exclusionType;
@@ -49,7 +47,7 @@ typedef uint8_t t_exclusionType;
 const unsigned int seedLimit = 400; // a limit on the limits which can be placed on seeds
 const t_itemSubtype organicSubtype = -1; // seems to fixed
 const t_exclusionType cookingExclusion = 1; // seems to be fixed
-const t_itemType limitType = 0; // used to store limit as an entry in the exclusion list. 0 = BAR
+const df::enums::item_type::item_type limitType = df::enums::item_type::BAR; // used to store limit as an entry in the exclusion list. 0 = BAR
 const t_itemSubtype limitSubtype = 0; // used to store limit as an entry in the exclusion list
 const t_exclusionType limitExclusion = 4; // used to store limit as an entry in the exclusion list
 
@@ -60,7 +58,7 @@ const t_exclusionType limitExclusion = 4; // used to store limit as an entry in 
  */
 
 // print the exclusion list, with the material index also translated into its token (for organics) - for debug really
-DFHACK_EXPORT void debug_print(Core &);
+DFHACK_EXPORT void debug_print(color_ostream &out);
 
 // remove this material from the exclusion list if it is in it
 DFHACK_EXPORT void allowPlantSeedCookery(t_materialIndex materialIndex);
@@ -81,6 +79,5 @@ DFHACK_EXPORT void setLimit(t_materialIndex materialIndex, unsigned int limit);
 DFHACK_EXPORT void clearLimits();
 
 DFHACK_EXPORT std::size_t size();
-}
 }
 }

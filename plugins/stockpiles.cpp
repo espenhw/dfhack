@@ -7,7 +7,7 @@
 #include "df/world.h"
 #include "df/ui.h"
 #include "df/building_stockpilest.h"
-#include "df/selection_rect.h"
+#include "df/global_objects.h"
 #include "df/viewscreen_dwarfmodest.h"
 
 using std::vector;
@@ -22,17 +22,13 @@ using df::global::selection_rect;
 
 using df::building_stockpilest;
 
-static command_result copystock(Core *c, vector <string> & parameters);
-static bool copystock_guard(Core *c, df::viewscreen *top);
+static command_result copystock(color_ostream &out, vector <string> & parameters);
+static bool copystock_guard(df::viewscreen *top);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "stockpiles";
-}
+DFHACK_PLUGIN("stockpiles");
 
-DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init (color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     if (world && ui) {
         commands.push_back(
             PluginCommand(
@@ -50,16 +46,16 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
-static bool copystock_guard(Core *c, df::viewscreen *top)
+static bool copystock_guard(df::viewscreen *top)
 {
     using namespace ui_sidebar_mode;
 
-    if (!dwarfmode_hotkey(c,top))
+    if (!Gui::dwarfmode_hotkey(top))
         return false;
 
     switch (ui->main.mode) {
@@ -73,7 +69,7 @@ static bool copystock_guard(Core *c, df::viewscreen *top)
     }
 }
 
-static command_result copystock(Core * c, vector <string> & parameters)
+static command_result copystock(color_ostream &out, vector <string> & parameters)
 {
     // HOTKEY COMMAND: CORE ALREADY SUSPENDED
 
@@ -83,14 +79,14 @@ static command_result copystock(Core * c, vector <string> & parameters)
         ui->main.mode = ui_sidebar_mode::QueryBuilding;
         selection_rect->start_x = -30000;
 
-        c->con << "Switched back to query building." << endl;
+        out << "Switched back to query building." << endl;
         return CR_OK;
     }
 
     building_stockpilest *sp = virtual_cast<building_stockpilest>(world->selected_building);
     if (!sp)
     {
-        c->con.printerr("Selected building isn't a stockpile.\n");
+        out.printerr("Selected building isn't a stockpile.\n");
         return CR_WRONG_USAGE;
     }
 
@@ -98,6 +94,6 @@ static command_result copystock(Core * c, vector <string> & parameters)
     ui->main.mode = ui_sidebar_mode::Stockpiles;
     world->selected_stockpile_type = stockpile_category::Custom;
 
-    c->con << "Stockpile options copied." << endl;
+    out << "Stockpile options copied." << endl;
     return CR_OK;
 }

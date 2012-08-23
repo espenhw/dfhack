@@ -15,51 +15,79 @@
 using std::vector;
 using std::string;
 using namespace DFHack;
-using namespace DFHack::Simple;
+
 //FIXME: possible race conditions with calling kittens from the IO thread and shutdown from Core.
 bool shutdown_flag = false;
 bool final_flag = true;
 bool timering = false;
 bool trackmenu_flg = false;
 bool trackpos_flg = false;
+bool statetrack = false;
 int32_t last_designation[3] = {-30000, -30000, -30000};
 int32_t last_mouse[2] = {-1, -1};
 uint32_t last_menu = 0;
 uint64_t timeLast = 0;
 
-DFhackCExport command_result kittens (Core * c, vector <string> & parameters);
-DFhackCExport command_result ktimer (Core * c, vector <string> & parameters);
-DFhackCExport command_result trackmenu (Core * c, vector <string> & parameters);
-DFhackCExport command_result trackpos (Core * c, vector <string> & parameters);
-DFhackCExport command_result colormods (Core * c, vector <string> & parameters);
+command_result kittens (color_ostream &out, vector <string> & parameters);
+command_result ktimer (color_ostream &out, vector <string> & parameters);
+command_result trackmenu (color_ostream &out, vector <string> & parameters);
+command_result trackpos (color_ostream &out, vector <string> & parameters);
+command_result trackstate (color_ostream &out, vector <string> & parameters);
+command_result colormods (color_ostream &out, vector <string> & parameters);
+command_result zoom (color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "kittens";
-}
+DFHACK_PLUGIN("kittens");
 
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("nyan","NYAN CAT INVASION!",kittens, true));
     commands.push_back(PluginCommand("ktimer","Measure time between game updates and console lag (toggle).",ktimer));
     commands.push_back(PluginCommand("trackmenu","Track menu ID changes (toggle).",trackmenu));
     commands.push_back(PluginCommand("trackpos","Track mouse and designation coords (toggle).",trackpos));
+    commands.push_back(PluginCommand("trackstate","Track world and map state (toggle).",trackstate));
     commands.push_back(PluginCommand("colormods","Dump colormod vectors.",colormods));
+    commands.push_back(PluginCommand("zoom","Zoom to x y z.",zoom));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     shutdown_flag = true;
     while(!final_flag)
     {
-        c->con.msleep(60);
+        Core::getInstance().getConsole().msleep(60);
     }
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_onupdate ( Core * c )
+DFhackCExport command_result plugin_onstatechange(color_ostream &out, state_change_event event)
+{
+    if(!statetrack)
+        return CR_OK;
+    switch (event) {
+        case SC_MAP_LOADED:
+            out << "Map loaded" << endl;
+            break;
+        case SC_MAP_UNLOADED:
+            out << "Map unloaded" << endl;
+            break;
+        case SC_WORLD_LOADED:
+            out << "World loaded" << endl;
+            break;
+        case SC_WORLD_UNLOADED:
+            out << "World unloaded" << endl;
+            break;
+        case SC_VIEWSCREEN_CHANGED:
+            out << "Screen changed" << endl;
+            break;
+        default:
+            out << "Something else is happening, nobody knows what..." << endl;
+            break;
+    }
+    return CR_OK;
+}
+
+DFhackCExport command_result plugin_onupdate ( color_ostream &out )
 {
     if(timering == true)
     {
@@ -68,43 +96,40 @@ DFhackCExport command_result plugin_onupdate ( Core * c )
         uint64_t delta = time2-timeLast;
         // harmless potential data race here...
         timeLast = time2;
-        c->con.print("Time delta = %d ms\n", delta);
+        out.print("Time delta = %d ms\n", delta);
     }
     if(trackmenu_flg)
     {
-        DFHack::Gui * g =c->getGui();
-        if (last_menu != *g->df_menu_state)
+        if (last_menu != df::global::ui->main.mode)
         {
-            last_menu = *g->df_menu_state;
-            c->con.print("Menu: %d\n",last_menu);
+            last_menu = df::global::ui->main.mode;
+            out.print("Menu: %d\n",last_menu);
         }
     }
     if(trackpos_flg)
     {
-        DFHack::Gui * g =c->getGui();
-        g->Start();
         int32_t desig_x, desig_y, desig_z;
-        g->getDesignationCoords(desig_x,desig_y,desig_z);
+        Gui::getDesignationCoords(desig_x,desig_y,desig_z);
         if(desig_x != last_designation[0] || desig_y != last_designation[1] || desig_z != last_designation[2])
         {
             last_designation[0] = desig_x;
             last_designation[1] = desig_y;
             last_designation[2] = desig_z;
-            c->con.print("Designation: %d %d %d\n",desig_x, desig_y, desig_z);
+            out.print("Designation: %d %d %d\n",desig_x, desig_y, desig_z);
         }
         int mouse_x, mouse_y;
-        g->getMousePos(mouse_x,mouse_y);
+        Gui::getMousePos(mouse_x,mouse_y);
         if(mouse_x != last_mouse[0] || mouse_y != last_mouse[1])
         {
             last_mouse[0] = mouse_x;
             last_mouse[1] = mouse_y;
-            c->con.print("Mouse: %d %d\n",mouse_x, mouse_y);
+            out.print("Mouse: %d %d\n",mouse_x, mouse_y);
         }
     }
     return CR_OK;
 }
 
-DFhackCExport command_result trackmenu (Core * c, vector <string> & parameters)
+command_result trackmenu (color_ostream &out, vector <string> & parameters)
 {
     if(trackmenu_flg)
     {
@@ -113,46 +138,67 @@ DFhackCExport command_result trackmenu (Core * c, vector <string> & parameters)
     }
     else
     {
-        DFHack::Gui * g =c->getGui();
-        if(g->df_menu_state)
+        if(df::global::ui)
         {
             trackmenu_flg = true;
-            last_menu =  *g->df_menu_state;
-            c->con.print("Menu: %d\n",last_menu);
+            last_menu = df::global::ui->main.mode;
+            out.print("Menu: %d\n",last_menu);
             return CR_OK;
         }
         else
         {
-            c->con.printerr("Can't read menu state\n");
+            out.printerr("Can't read menu state\n");
             return CR_FAILURE;
         }
     }
 }
-DFhackCExport command_result trackpos (Core * c, vector <string> & parameters)
+command_result trackpos (color_ostream &out, vector <string> & parameters)
 {
     trackpos_flg = !trackpos_flg;
     return CR_OK;
 }
 
-DFhackCExport command_result colormods (Core * c, vector <string> & parameters)
+command_result trackstate ( color_ostream& out, vector< string >& parameters )
 {
-    c->Suspend();
+    statetrack = !statetrack;
+    return CR_OK;
+}
+
+command_result colormods (color_ostream &out, vector <string> & parameters)
+{
+    CoreSuspender suspend;
     auto & vec = df::global::world->raws.creatures.alphabetic;
     for(int i = 0; i < vec.size();i++)
     {
         df::creature_raw* rawlion = vec[i];
         df::caste_raw * caste = rawlion->caste[0];
-        c->con.print("%s\nCaste addr 0x%x\n",rawlion->creature_id.c_str(), &caste->color_modifiers);
+        out.print("%s\nCaste addr 0x%x\n",rawlion->creature_id.c_str(), &caste->color_modifiers);
         for(int j = 0; j < caste->color_modifiers.size();j++)
         {
-            c->con.print("mod %d: 0x%x\n", j, caste->color_modifiers[j]);
+            out.print("mod %d: 0x%x\n", j, caste->color_modifiers[j]);
         }
     }
-    c->Resume();
     return CR_OK;
 }
 
-DFhackCExport command_result ktimer (Core * c, vector <string> & parameters)
+// FIXME: move cursor properly relative to view position
+command_result zoom (color_ostream &out, vector <string> & parameters)
+{
+    if(parameters.size() < 3)
+        return CR_FAILURE;
+    int x = atoi( parameters[0].c_str());
+    int y = atoi( parameters[1].c_str());
+    int z = atoi( parameters[2].c_str());
+    int xi, yi, zi;
+    CoreSuspender cs;
+    if(Gui::getCursorCoords(xi, yi, zi))
+    {
+        Gui::setCursorCoords(x,y,z);
+    }
+    Gui::setViewCoords(x,y,z);
+}
+
+command_result ktimer (color_ostream &out, vector <string> & parameters)
 {
     if(timering)
     {
@@ -160,20 +206,22 @@ DFhackCExport command_result ktimer (Core * c, vector <string> & parameters)
         return CR_OK;
     }
     uint64_t timestart = GetTimeMs64();
-    c->Suspend();
-    c->Resume();
+    {
+        CoreSuspender suspend;
+    }
     uint64_t timeend = GetTimeMs64();
-    c->con.print("Time to suspend = %d ms\n",timeend - timestart);
+    out.print("Time to suspend = %d ms\n",timeend - timestart);
     // harmless potential data race here...
     timeLast = timeend;
     timering = true;
     return CR_OK;
 }
 
-DFhackCExport command_result kittens (Core * c, vector <string> & parameters)
+command_result kittens (color_ostream &out, vector <string> & parameters)
 {
     final_flag = false;
-    Console & con = c->con;
+    assert(out.is_console());
+    Console &con = static_cast<Console&>(out);
     // http://evilzone.org/creative-arts/nyan-cat-ascii/
     const char * nyan []=
     {

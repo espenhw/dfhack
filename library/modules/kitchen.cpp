@@ -17,7 +17,6 @@ using namespace std;
 #include "ModuleFactory.h"
 #include "Core.h"
 using namespace DFHack;
-using namespace DFHack::Simple;
 
 #include "DataDefs.h"
 #include "df/world.h"
@@ -29,12 +28,12 @@ using namespace df::enums;
 using df::global::world;
 using df::global::ui;
 
-void Kitchen::debug_print(Core &core)
+void Kitchen::debug_print(color_ostream &out)
 {
-    core.con.print("Kitchen Exclusions\n");
+    out.print("Kitchen Exclusions\n");
     for(std::size_t i = 0; i < size(); ++i)
     {
-        core.con.print("%2u: IT:%2i IS:%i MT:%3i MI:%2i ET:%i %s\n",
+        out.print("%2u: IT:%2i IS:%i MT:%3i MI:%2i ET:%i %s\n",
                        i,
                        ui->kitchen.item_types[i],
                        ui->kitchen.item_subtypes[i],
@@ -44,7 +43,7 @@ void Kitchen::debug_print(Core &core)
                        (ui->kitchen.mat_types[i] >= 419 && ui->kitchen.mat_types[i] <= 618) ? world->raws.plants.all[ui->kitchen.mat_indices[i]]->id.c_str() : "n/a"
         );
     }
-    core.con.print("\n");
+    out.print("\n");
 }
 
 void Kitchen::allowPlantSeedCookery(t_materialIndex materialIndex)
@@ -57,7 +56,7 @@ void Kitchen::allowPlantSeedCookery(t_materialIndex materialIndex)
         for(std::size_t i = 0; i < size(); ++i)
         {
             if(ui->kitchen.mat_indices[i] == materialIndex
-               && (ui->kitchen.item_types[i] == df::item_type::SEEDS || ui->kitchen.item_types[i] == df::item_type::PLANT)
+               && (ui->kitchen.item_types[i] == item_type::SEEDS || ui->kitchen.item_types[i] == item_type::PLANT)
                && ui->kitchen.exc_types[i] == cookingExclusion
             )
             {
@@ -86,15 +85,15 @@ void Kitchen::denyPlantSeedCookery(t_materialIndex materialIndex)
         if(ui->kitchen.mat_indices[i] == materialIndex
            && ui->kitchen.exc_types[i] == cookingExclusion)
         {
-            if(ui->kitchen.item_types[i] == df::item_type::SEEDS)
+            if(ui->kitchen.item_types[i] == item_type::SEEDS)
                 SeedAlreadyIn = true;
-            else if (ui->kitchen.item_types[i] == df::item_type::PLANT)
+            else if (ui->kitchen.item_types[i] == item_type::PLANT)
                 PlantAlreadyIn = true;
         }
     }
     if(!SeedAlreadyIn)
     {
-        ui->kitchen.item_types.push_back(df::item_type::SEEDS);
+        ui->kitchen.item_types.push_back(item_type::SEEDS);
         ui->kitchen.item_subtypes.push_back(organicSubtype);
         ui->kitchen.mat_types.push_back(type->material_defs.type_seed);
         ui->kitchen.mat_indices.push_back(materialIndex);
@@ -102,7 +101,7 @@ void Kitchen::denyPlantSeedCookery(t_materialIndex materialIndex)
     }
     if(!PlantAlreadyIn)
     {
-        ui->kitchen.item_types.push_back(df::item_type::PLANT);
+        ui->kitchen.item_types.push_back(item_type::PLANT);
         ui->kitchen.item_subtypes.push_back(organicSubtype);
         ui->kitchen.mat_types.push_back(type->material_defs.type_basic_mat);
         ui->kitchen.mat_indices.push_back(materialIndex);

@@ -35,18 +35,21 @@ using namespace std;
 #include "Types.h"
 #include "ModuleFactory.h"
 #include "Core.h"
+#include "Error.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
+using namespace df::enums;
 
 #include "DataDefs.h"
 #include "df/world.h"
+#include "df/d_init.h"
 
 using df::global::world;
+using df::global::d_init;
 
 bool Translation::IsValid ()
 {
-    return (world->raws.language.words.size() > 0) && (world->raws.language.translations.size() > 0);
+    return (world && (world->raws.language.words.size() > 0) && (world->raws.language.translations.size() > 0));
 }
 
 bool Translation::readName(t_name & name, df::language_name * source)
@@ -78,50 +81,114 @@ bool Translation::copyName(df::language_name * source, df::language_name * targe
     return true;
 }
 
-string Translation::TranslateName(const df::language_name * name, bool inEnglish)
+std::string Translation::capitalize(const std::string &str, bool all_words)
 {
-    string out;
+    string upper = str;
 
-    if(!inEnglish)
+    if (!upper.empty())
+    {
+        upper[0] = toupper(upper[0]);
+
+        if (all_words)
+        {
+            for (size_t i = 1; i < upper.size(); i++)
+                if (isspace(upper[i-1]))
+                    upper[i] = toupper(upper[i]);
+        }
+    }
+
+    return upper;
+}
+
+void addNameWord (string &out, const string &word)
+{
+    if (word.empty())
+        return;
+    if (out.length() > 0)
+        out.append(" ");
+    out.append(Translation::capitalize(word));
+}
+
+void Translation::setNickname(df::language_name *name, std::string nick)
+{
+    CHECK_NULL_POINTER(name);
+
+    if (!name->has_name)
+    {
+        *name = df::language_name();
+
+        name->language = 0;
+        name->has_name = true;
+    }
+
+    name->nickname = nick;
+}
+
+string Translation::TranslateName(const df::language_name * name, bool inEnglish, bool onlyLastPart)
+{
+    CHECK_NULL_POINTER(name);
+
+    string out;
+    string word;
+
+    if (!onlyLastPart) {
+        if (!name->first_name.empty())
+            addNameWord(out, name->first_name);
+
+        if (!name->nickname.empty())
+        {
+            word = "`" + name->nickname + "'";
+            switch (d_init ? d_init->nickname_dwarf : d_init_nickname::CENTRALIZE)
+            {
+            case d_init_nickname::REPLACE_ALL:
+                out = word;
+                return out;
+            case d_init_nickname::REPLACE_FIRST:
+                out = "";
+                break;
+            case d_init_nickname::CENTRALIZE:
+                break;
+            }
+            addNameWord(out, word);
+        }
+    }
+
+    if (!inEnglish)
     {
         if (name->words[0] >= 0 || name->words[1] >= 0)
         {
+            word.clear();
             if (name->words[0] >= 0)
-                out.append(*world->raws.language.translations[name->language]->words[name->words[0]]);
+                word.append(*world->raws.language.translations[name->language]->words[name->words[0]]);
             if (name->words[1] >= 0)
-                out.append(*world->raws.language.translations[name->language]->words[name->words[1]]);
-            out[0] = toupper(out[0]);
+                word.append(*world->raws.language.translations[name->language]->words[name->words[1]]);
+            addNameWord(out, word);
         }
         if (name->words[5] >= 0)
         {
-            string word;
+            word.clear();
             for (int i = 2; i <= 5; i++)
                 if (name->words[i] >= 0)
                     word.append(*world->raws.language.translations[name->language]->words[name->words[i]]);
-            word[0] = toupper(word[0]);
-            if (out.length() > 0)
-                out.append(" ");
-            out.append(word);
+            addNameWord(out, word);
         }
         if (name->words[6] >= 0)
         {
-            string word = *world->raws.language.translations[name->language]->words[name->words[6]];
-
-            word[0] = toupper(word[0]);
-            if (out.length() > 0)
-                out.append(" ");
-            out.append(word);
+            word.clear();
+            word.append(*world->raws.language.translations[name->language]->words[name->words[6]]);
+            addNameWord(out, word);
         }
     }
     else
     {
         if (name->words[0] >= 0 || name->words[1] >= 0)
         {
+            word.clear();
             if (name->words[0] >= 0)
-                out.append(world->raws.language.words[name->words[0]]->forms[name->parts_of_speech[0].value]);
+                word.append(world->raws.language.words[name->words[0]]->forms[name->parts_of_speech[0].value]);
             if (name->words[1] >= 0)
-                out.append(world->raws.language.words[name->words[1]]->forms[name->parts_of_speech[1].value]);
-            out[0] = toupper(out[0]);
+                word.append(world->raws.language.words[name->words[1]]->forms[name->parts_of_speech[1].value]);
+            addNameWord(out, word);
         }
         if (name->words[5] >= 0)
         {
@@ -129,14 +196,11 @@ string Translation::TranslateName(const df::language_name * name, bool inEnglish
                 out.append(" the");
             else
                 out.append("The");
+
             for (int i = 2; i <= 5; i++)
             {
                 if (name->words[i] >= 0)
-                {
-                    string word = world->raws.language.words[name->words[i]]->forms[name->parts_of_speech[i].value];
-                    word[0] = toupper(word[0]);
-                    out.append(" " + word);
-                }
+                    addNameWord(out, world->raws.language.words[name->words[i]]->forms[name->parts_of_speech[i].value]);
             }
         }
         if (name->words[6] >= 0)
@@ -146,10 +210,9 @@ string Translation::TranslateName(const df::language_name * name, bool inEnglish
             else
                 out.append("Of");
 
-            string word = world->raws.language.words[name->words[6]]->forms[name->parts_of_speech[6].value];
-            word[0] = toupper(word[0]);
-            out.append(" " + word);
+            addNameWord(out, world->raws.language.words[name->words[6]]->forms[name->parts_of_speech[6].value]);
         }
     }
+
     return out;
 }

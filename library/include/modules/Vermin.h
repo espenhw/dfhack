@@ -3,7 +3,12 @@
  * \defgroup grp_vermin Wild vermin (ants, bees, etc)
  */
 #include "Export.h"
-namespace DFHack { namespace Simple { namespace Vermin
+#include "DataDefs.h"
+#include "df/vermin.h"
+
+namespace DFHack
+{
+namespace Vermin
 {
     /**
      * Structure for holding a read DF vermin spawn point object
@@ -11,7 +16,7 @@ namespace DFHack { namespace Simple { namespace Vermin
      */
     struct t_vermin
     {
-        void * origin;
+        df::vermin * origin;
         int16_t race;
         int16_t caste;
         uint16_t x;
@@ -35,4 +40,5 @@ namespace DFHack { namespace Simple { namespace Vermin
      * Write into vermin object
      */
     DFHACK_EXPORT bool Write (const uint32_t index, t_vermin & point);
-} } } // end DFHack::Simple::Vermin
+}// end DFHack::Vermin
+}

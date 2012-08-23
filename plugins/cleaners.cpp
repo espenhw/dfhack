@@ -9,20 +9,21 @@
 #include "df/unit.h"
 #include "df/unit_spatter.h"
 #include "df/matter_state.h"
-#include "df/cursor.h"
+#include "df/global_objects.h"
 #include "df/builtin_mats.h"
 #include "df/contaminant.h"
 
 using std::vector;
 using std::string;
 using namespace DFHack;
-using namespace DFHack::Simple;
 using namespace df::enums;
 
 using df::global::world;
 using df::global::cursor;
 
-command_result cleanmap (Core * c, bool snow, bool mud)
+DFHACK_PLUGIN("cleaners");
+
+command_result cleanmap (color_ostream &out, bool snow, bool mud)
 {
     // Invoked from clean(), already suspended
     int num_blocks = 0, blocks_total = world->map.map_blocks.size();
@@ -38,7 +39,7 @@ command_result cleanmap (Core * c, bool snow, bool mud)
                 block->occupancy[x][y].bits.arrow_variant = 0;
             }
         }
-        for (int j = 0; j < block->block_events.size(); j++)
+        for (size_t j = 0; j < block->block_events.size(); j++)
         {
             df::block_square_event *evt = block->block_events[j];
             if (evt->getType() != block_square_event_type::material_spatter)
@@ -66,21 +67,21 @@ command_result cleanmap (Core * c, bool snow, bool mud)
     }
 
     if(num_blocks)
-        c->con.print("Cleaned %d of %d map blocks.\n", num_blocks, blocks_total);
+        out.print("Cleaned %d of %d map blocks.\n", num_blocks, blocks_total);
     return CR_OK;
 }
 
-command_result cleanitems (Core * c)
+command_result cleanitems (color_ostream &out)
 {
     // Invoked from clean(), already suspended
     int cleaned_items = 0, cleaned_total = 0;
-    for (int i = 0; i < world->items.all.size(); i++)
+    for (size_t i = 0; i < world->items.all.size(); i++)
     {
         // currently, all item classes extend item_actual, so this should be safe
         df::item_actual *item = (df::item_actual *)world->items.all[i];
         if (item->contaminants && item->contaminants->size())
         {
-            for (int j = 0; j < item->contaminants->size(); j++)
+            for (size_t j = 0; j < item->contaminants->size(); j++)
                 delete item->contaminants->at(j);
             cleaned_items++;
             cleaned_total += item->contaminants->size();
@@ -88,21 +89,20 @@ command_result cleanitems (Core * c)
         }
     }
     if (cleaned_total)
-        c->con.print("Removed %d contaminants from %d items.\n", cleaned_total, cleaned_items);
+        out.print("Removed %d contaminants from %d items.\n", cleaned_total, cleaned_items);
     return CR_OK;
 }
 
-command_result cleanunits (Core * c)
+command_result cleanunits (color_ostream &out)
 {
     // Invoked from clean(), already suspended
-    int num_units = world->units.all.size();
     int cleaned_units = 0, cleaned_total = 0;
-    for (int i = 0; i < num_units; i++)
+    for (size_t i = 0; i < world->units.all.size(); i++)
     {
         df::unit *unit = world->units.all[i];
         if (unit->body.spatters.size())
         {
-            for (int j = 0; j < unit->body.spatters.size(); j++)
+            for (size_t j = 0; j < unit->body.spatters.size(); j++)
                 delete unit->body.spatters[j];
             cleaned_units++;
             cleaned_total += unit->body.spatters.size();
@@ -110,31 +110,31 @@ command_result cleanunits (Core * c)
         }
     }
     if (cleaned_total)
-        c->con.print("Removed %d contaminants from %d creatures.\n", cleaned_total, cleaned_units);
+        out.print("Removed %d contaminants from %d creatures.\n", cleaned_total, cleaned_units);
     return CR_OK;
 }
 
-DFhackCExport command_result spotclean (Core * c, vector <string> & parameters)
+command_result spotclean (color_ostream &out, vector <string> & parameters)
 {
     // HOTKEY COMMAND: CORE ALREADY SUSPENDED
     if (cursor->x == -30000)
     {
-        c->con.printerr("The cursor is not active.\n");
+        out.printerr("The cursor is not active.\n");
         return CR_WRONG_USAGE;
     }
     if (!Maps::IsValid())
     {
-        c->con.printerr("Map is not available.\n");
+        out.printerr("Map is not available.\n");
         return CR_FAILURE;
     }
-    df::map_block *block = Maps::getBlockAbs(cursor->x, cursor->y, cursor->z);
+    df::map_block *block = Maps::getTileBlock(cursor->x, cursor->y, cursor->z);
     if (block == NULL)
     {
-        c->con.printerr("Invalid map block selected!\n");
+        out.printerr("Invalid map block selected!\n");
         return CR_FAILURE;
     }
 
-    for (int i = 0; i < block->block_events.size(); i++)
+    for (size_t i = 0; i < block->block_events.size(); i++)
     {
         df::block_square_event *evt = block->block_events[i];
         if (evt->getType() != block_square_event_type::material_spatter)
@@ -146,15 +146,14 @@ DFhackCExport command_result spotclean (Core * c, vector <string> & parameters)
     return CR_OK;
 }
 
-DFhackCExport command_result clean (Core * c, vector <string> & parameters)
+command_result clean (color_ostream &out, vector <string> & parameters)
 {
-    bool help = false;
     bool map = false;
     bool snow = false;
     bool mud = false;
     bool units = false;
     bool items = false;
-    for(int i = 0; i < parameters.size();i++)
+    for(size_t i = 0; i < parameters.size();i++)
     {
         if(parameters[i] == "map")
             map = true;
@@ -168,57 +167,53 @@ DFhackCExport command_result clean (Core * c, vector <string> & parameters)
             items = true;
             units = true;
         }
-        if(parameters[i] == "snow")
+        else if(parameters[i] == "snow")
             snow = true;
         else if(parameters[i] == "mud")
             mud = true;
-        else if(parameters[i] == "help" ||parameters[i] == "?")
-        {
-            help = true;
-        }
+        else
+            return CR_WRONG_USAGE;
     }
     if(!map && !units && !items)
-        help = true;
-    if(help)
-    {
-        c->con.print("Removes contaminants from map tiles, items and creatures.\n"
-            "Options:\n"
-            "map        - clean the map tiles\n"
-            "items      - clean all items\n"
-            "units      - clean all creatures\n"
-            "all        - clean everything.\n"
-            "More options for 'map':\n"
-            "snow       - also remove snow\n"
-            "mud        - also remove mud\n"
-            "Example: clean all mud snow\n"
-            "This removes all spatter, including mud and snow from map tiles.\n"
-            );
-        return CR_OK;
-    }
-    CoreSuspender suspend(c);
+        return CR_WRONG_USAGE;
+
+    CoreSuspender suspend;
+
     if(map)
-        cleanmap(c,snow,mud);
+        cleanmap(out,snow,mud);
     if(units)
-        cleanunits(c);
+        cleanunits(out);
     if(items)
-        cleanitems(c);
+        cleanitems(out);
     return CR_OK;
 }
 
-DFhackCExport const char * plugin_name ( void )
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "cleaners";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
-    commands.push_back(PluginCommand("clean","Removes contaminants from map tiles, items and creatures.",clean));
-    commands.push_back(PluginCommand("spotclean","Cleans map tile under cursor.",spotclean,cursor_hotkey));
+    commands.push_back(PluginCommand(
+        "clean","Removes contaminants from map tiles, items and creatures.",
+        clean, false,
+        "  Removes contaminants from map tiles, items and creatures.\n"
+        "Options:\n"
+        "  map        - clean the map tiles\n"
+        "  items      - clean all items\n"
+        "  units      - clean all creatures\n"
+        "  all        - clean everything.\n"
+        "More options for 'map':\n"
+        "  snow       - also remove snow\n"
+        "  mud        - also remove mud\n"
+        "Example:\n"
+        "  clean all mud snow\n"
+        "    Removes all spatter, including mud and snow from map tiles.\n"
+    ));
+    commands.push_back(PluginCommand(
+        "spotclean","Cleans map tile under cursor.",
+        spotclean,Gui::cursor_hotkey
+    ));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }

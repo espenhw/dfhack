@@ -49,6 +49,13 @@ distribution.
     #pragma warning( disable: 4800 )
     // disable more stupid
     #pragma warning( disable: 4068 )
+    // no signed value outside enum range bs
+    #pragma warning( disable: 4341)
+    // just shut up already.
+    #pragma warning( disable: 4244)
+    #pragma warning( disable: 4018)
+    // nonstandard extension used: enum 'df::whatever::etc' used in qualified name
+    #pragma warning( disable: 4482)
 #endif
 
 #endif

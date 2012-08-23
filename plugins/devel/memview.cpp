@@ -3,7 +3,7 @@
 #include "PluginManager.h"
 #include "MemAccess.h"
 #include "MiscUtils.h"
-#include <../depends/tthread/tinythread.h> //not sure if correct
+#include <tinythread.h> //not sure if correct
 #include <string>
 #include <vector>
 #include <sstream>
@@ -28,16 +28,12 @@ enum HEXVIEW_STATES
 {
 	STATE_OFF,STATE_ON
 };
-DFhackCExport command_result memview (Core * c, vector <string> & parameters);
+command_result memview (color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "memview";
-}
+DFHACK_PLUGIN("memview");
 
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init (color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
 	commands.push_back(PluginCommand("memview","Shows memory in real time. Params: adrr length refresh_rate. If addr==0 then stop viewing",memview));
 	memdata.state=STATE_OFF;
 	mymutex=new tthread::mutex;
@@ -62,15 +58,13 @@ bool isAddr(uint32_t *trg,vector<t_memrange> & ranges)
 
 	return false;
 }
-void outputHex(uint8_t *buf,uint8_t *lbuf,size_t len,size_t start,Core *c,vector<t_memrange> & ranges)
+void outputHex(uint8_t *buf,uint8_t *lbuf,size_t len,size_t start,color_ostream &con,vector<t_memrange> & ranges)
 {
-	Console &con=c->con;
     const size_t page_size=16;
-	con.clear();
 
 	for(size_t i=0;i<len;i+=page_size)
 	{
-	    con.gotoxy(1,i/page_size+1);
+	    //con.gotoxy(1,i/page_size+1);
 		con.print("0x%08X ",i+start);
 		for(size_t j=0;(j<page_size) && (i+j<len);j++)
 			{
@@ -97,8 +91,6 @@ void outputHex(uint8_t *buf,uint8_t *lbuf,size_t len,size_t start,Core *c,vector
 		//con.print("\n");
 	}
 	con.print("\n");
-	con.flush();
-
 }
 void Deinit()
 {
@@ -109,7 +101,7 @@ void Deinit()
 		delete [] memdata.lbuf;
 	}
 }
-DFhackCExport command_result plugin_onupdate ( Core * c )
+DFhackCExport command_result plugin_onupdate (color_ostream &out)
 {
 
 	mymutex->lock();
@@ -118,7 +110,7 @@ DFhackCExport command_result plugin_onupdate ( Core * c )
 		mymutex->unlock();
 		return CR_OK;
 	}
-	//Console &con=c->con;
+	//Console &con=out;
 	uint64_t time2 = GetTimeMs64();
 	uint64_t delta = time2-timeLast;
 
@@ -130,8 +122,8 @@ DFhackCExport command_result plugin_onupdate ( Core * c )
 	}
 	timeLast = time2;
 
-	c->p->read(memdata.addr,memdata.len,memdata.buf);
-	outputHex(memdata.buf,memdata.lbuf,memdata.len,(size_t)memdata.addr,c,memdata.ranges);
+	Core::getInstance().p->read(memdata.addr,memdata.len,memdata.buf);
+	outputHex(memdata.buf,memdata.lbuf,memdata.len,(size_t)memdata.addr,out,memdata.ranges);
     memcpy(memdata.lbuf, memdata.buf, memdata.len);
 	if(memdata.refresh==0)
 		Deinit();
@@ -139,10 +131,10 @@ DFhackCExport command_result plugin_onupdate ( Core * c )
 	return CR_OK;
 
 }
-DFhackCExport command_result memview (Core * c, vector <string> & parameters)
+command_result memview (color_ostream &out, vector <string> & parameters)
 {
 	mymutex->lock();
-	c->p->getMemRanges(memdata.ranges);
+	Core::getInstance().p->getMemRanges(memdata.ranges);
 	memdata.addr=(void *)convert(parameters[0],true);
 	if(memdata.addr==0)
 	{
@@ -160,7 +152,7 @@ DFhackCExport command_result memview (Core * c, vector <string> & parameters)
 				isValid=true;
 		if(!isValid)
 		{
-			c->con.printerr("Invalid address:%x\n",memdata.addr);
+			out.printerr("Invalid address:%x\n",memdata.addr);
 			mymutex->unlock();
 			return CR_OK;
 		}
@@ -180,11 +172,11 @@ DFhackCExport command_result memview (Core * c, vector <string> & parameters)
 	uint8_t *buf,*lbuf;
 	memdata.buf=new uint8_t[memdata.len];
 	memdata.lbuf=new uint8_t[memdata.len];
-	c->p->getMemRanges(memdata.ranges);
+	Core::getInstance().p->getMemRanges(memdata.ranges);
 	mymutex->unlock();
 	return CR_OK;
 }
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown (color_ostream &out)
 {
 	mymutex->lock();
 	Deinit();

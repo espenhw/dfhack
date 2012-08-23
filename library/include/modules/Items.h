@@ -29,7 +29,6 @@ distribution.
 #include "Export.h"
 #include "Module.h"
 #include "Types.h"
-#include "Virtual.h"
 #include "modules/Materials.h"
 #include "MemAccess.h"
 
@@ -37,10 +36,18 @@ distribution.
 #include "df/item.h"
 #include "df/item_type.h"
 #include "df/general_ref.h"
+#include "df/specific_ref.h"
+#include "df/building_actual.h"
+#include "df/body_part_raw.h"
+#include "df/unit_inventory_item.h"
 
 namespace df
 {
     struct itemdef;
+}
+
+namespace MapExtras {
+    class MapCache;
 }
 
 /**
@@ -88,9 +95,6 @@ namespace DFHack
         return a.type != b.type || a.subtype != b.subtype;
     }
 
-class Context;
-class DFContextShared;
-
 /**
  * Type for holding an item read from DF
  * \ingroup grp_items
@@ -115,8 +119,6 @@ struct dfh_item
  * \ingroup grp_modules
  * \ingroup grp_items
  */
-namespace Simple
-{
 namespace Items
 {
 
@@ -128,21 +130,30 @@ DFHACK_EXPORT bool copyItem(df::item * source, dfh_item & target);
 /// write copied item back to its origin
 DFHACK_EXPORT bool writeItem(const dfh_item & item);
 
-/// get the class name of an item
-DFHACK_EXPORT std::string getItemClass(const df::item * item);
-/// who owns this item we already read?
-DFHACK_EXPORT int32_t getItemOwnerID(const df::item * item);
-DFHACK_EXPORT df::unit *getItemOwner(const df::item * item);
+/// Retrieve refs
+DFHACK_EXPORT df::general_ref *getGeneralRef(df::item *item, df::general_ref_type type);
+DFHACK_EXPORT df::specific_ref *getSpecificRef(df::item *item, df::specific_ref_type type);
+
+/// Retrieve the owner of the item.
+DFHACK_EXPORT df::unit *getOwner(df::item *item);
+/// Set the owner of the item. Pass NULL as unit to remove the owner.
+DFHACK_EXPORT bool setOwner(df::item *item, df::unit *unit);
+
 /// which item is it contained in?
-DFHACK_EXPORT int32_t getItemContainerID(const df::item * item);
-DFHACK_EXPORT df::item *getItemContainer(const df::item * item);
+DFHACK_EXPORT df::item *getContainer(df::item *item);
 /// which items does it contain?
-DFHACK_EXPORT bool getContainedItems(const df::item * item, /*output*/ std::vector<int32_t> &items);
-/// wipe out the owner records
-DFHACK_EXPORT bool removeItemOwner(df::item * item);
-/// read item references, filtered by class
-DFHACK_EXPORT bool readItemRefs(const df::item * item, const df::general_ref_type type,
-                  /*output*/ std::vector<int32_t> &values);
-}
+DFHACK_EXPORT void getContainedItems(df::item *item, /*output*/ std::vector<df::item*> *items);
+
+/// Returns the true position of the item.
+DFHACK_EXPORT df::coord getPosition(df::item *item);
+
+/// Returns the description string of the item.
+DFHACK_EXPORT std::string getDescription(df::item *item, int type = 0, bool decorate = false);
+
+DFHACK_EXPORT bool moveToGround(MapExtras::MapCache &mc, df::item *item, df::coord pos);
+DFHACK_EXPORT bool moveToContainer(MapExtras::MapCache &mc, df::item *item, df::item *container);
+DFHACK_EXPORT bool moveToBuilding(MapExtras::MapCache &mc, df::item *item, df::building_actual *building,int16_t use_mode);
+DFHACK_EXPORT bool moveToInventory(MapExtras::MapCache &mc, df::item *item, df::unit *unit,
+    df::unit_inventory_item::T_mode mode = df::unit_inventory_item::Carried, int body_part = -1);
 }
 }

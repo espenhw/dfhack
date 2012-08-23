@@ -1,4 +1,4 @@
-﻿/*
+/*
 https://github.com/peterix/dfhack
 Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
 
@@ -32,6 +32,7 @@ distribution.
 using namespace std;
 
 #include "Core.h"
+#include "Error.h"
 #include "PluginManager.h"
 #include "MiscUtils.h"
 
@@ -45,6 +46,7 @@ using namespace std;
 #include "df/job.h"
 #include "df/job_item.h"
 #include "df/job_list_link.h"
+#include "df/specific_ref.h"
 #include "df/general_ref.h"
 #include "df/general_ref_unit_workerst.h"
 #include "df/general_ref_building_holderst.h"
@@ -52,8 +54,10 @@ using namespace std;
 using namespace DFHack;
 using namespace df::enums;
 
-df::job *DFHack::cloneJobStruct(df::job *job)
+df::job *DFHack::Job::cloneJobStruct(df::job *job)
 {
+    CHECK_NULL_POINTER(job);
+
     df::job *pnew = new df::job(*job);
 
     // Clean out transient fields
@@ -64,7 +68,7 @@ df::job *DFHack::cloneJobStruct(df::job *job)
     pnew->list_link = NULL;
     pnew->completion_timer = -1;
     pnew->items.clear();
-    pnew->misc_links.clear();
+    pnew->specific_refs.clear();
 
     // Clone refs
     for (int i = pnew->references.size()-1; i >= 0; i--)
@@ -84,13 +88,13 @@ df::job *DFHack::cloneJobStruct(df::job *job)
     return pnew;
 }
 
-void DFHack::deleteJobStruct(df::job *job)
+void DFHack::Job::deleteJobStruct(df::job *job)
 {
     if (!job)
         return;
 
     // Only allow free-floating job structs
-    assert(!job->list_link && job->items.empty() && job->misc_links.empty());
+    assert(!job->list_link && job->items.empty() && job->specific_refs.empty());
 
     for (int i = job->references.size()-1; i >= 0; i--)
         delete job->references[i];
@@ -105,6 +109,9 @@ void DFHack::deleteJobStruct(df::job *job)
 
 bool DFHack::operator== (const df::job_item &a, const df::job_item &b)
 {
+    CHECK_NULL_POINTER(&a);
+    CHECK_NULL_POINTER(&b);
+
     if (!(CMP(item_type) && CMP(item_subtype) &&
           CMP(mat_type) && CMP(mat_index) &&
           CMP(flags1.whole) && CMP(quantity) && CMP(vector_id) &&
@@ -125,6 +132,9 @@ bool DFHack::operator== (const df::job_item &a, const df::job_item &b)
 
 bool DFHack::operator== (const df::job &a, const df::job &b)
 {
+    CHECK_NULL_POINTER(&a);
+    CHECK_NULL_POINTER(&b);
+
     if (!(CMP(job_type) && CMP(unk2) &&
           CMP(mat_type) && CMP(mat_index) &&
           CMP(item_subtype) && CMP(item_category.whole) &&
@@ -139,48 +149,52 @@ bool DFHack::operator== (const df::job &a, const df::job &b)
     return true;
 }
 
-static void print_job_item_details(Core *c, df::job *job, unsigned idx, df::job_item *item)
+void DFHack::Job::printItemDetails(color_ostream &out, df::job_item *item, int idx)
 {
+    CHECK_NULL_POINTER(item);
+
     ItemTypeInfo info(item);
-    c->con << "  Input Item " << (idx+1) << ": " << info.toString();
+    out << "  Input Item " << (idx+1) << ": " << info.toString();
 
     if (item->quantity != 1)
-        c->con << "; quantity=" << item->quantity;
+        out << "; quantity=" << item->quantity;
     if (item->min_dimension >= 0)
-        c->con << "; min_dimension=" << item->min_dimension;
-    c->con << endl;
+        out << "; min_dimension=" << item->min_dimension;
+    out << endl;
 
     MaterialInfo mat(item);
     if (mat.isValid() || item->metal_ore >= 0) {
-        c->con << "    material: " << mat.toString();
+        out << "    material: " << mat.toString();
         if (item->metal_ore >= 0)
-            c->con << "; ore of " << MaterialInfo(0,item->metal_ore).toString();
-        c->con << endl;
+            out << "; ore of " << MaterialInfo(0,item->metal_ore).toString();
+        out << endl;
     }
 
     if (item->flags1.whole)
-        c->con << "    flags1: " << bitfieldToString(item->flags1) << endl;
+        out << "    flags1: " << bitfield_to_string(item->flags1) << endl;
     if (item->flags2.whole)
-        c->con << "    flags2: " << bitfieldToString(item->flags2) << endl;
+        out << "    flags2: " << bitfield_to_string(item->flags2) << endl;
     if (item->flags3.whole)
-        c->con << "    flags3: " << bitfieldToString(item->flags3) << endl;
+        out << "    flags3: " << bitfield_to_string(item->flags3) << endl;
 
     if (!item->reaction_class.empty())
-        c->con << "    reaction class: " << item->reaction_class << endl;
+        out << "    reaction class: " << item->reaction_class << endl;
     if (!item->has_material_reaction_product.empty())
-        c->con << "    reaction product: " << item->has_material_reaction_product << endl;
+        out << "    reaction product: " << item->has_material_reaction_product << endl;
     if (item->has_tool_use >= 0)
-        c->con << "    tool use: " << ENUM_KEY_STR(tool_uses, item->has_tool_use) << endl;
+        out << "    tool use: " << ENUM_KEY_STR(tool_uses, item->has_tool_use) << endl;
 }
 
-void DFHack::printJobDetails(Core *c, df::job *job)
+void DFHack::Job::printJobDetails(color_ostream &out, df::job *job)
 {
-    c->con.color(job->flags.bits.suspend ? Console::COLOR_DARKGREY : Console::COLOR_GREY);
-    c->con << "Job " << job->id << ": " << ENUM_KEY_STR(job_type,job->job_type);
+    CHECK_NULL_POINTER(job);
+
+    out.color(job->flags.bits.suspend ? Console::COLOR_DARKGREY : Console::COLOR_GREY);
+    out << "Job " << job->id << ": " << ENUM_KEY_STR(job_type,job->job_type);
     if (job->flags.whole)
-           c->con << " (" << bitfieldToString(job->flags) << ")";
-    c->con << endl;
-    c->con.reset_color();
+           out << " (" << bitfield_to_string(job->flags) << ")";
+    out << endl;
+    out.reset_color();
 
     df::item_type itype = ENUM_ATTR(job_type, item, job->job_type);
 
@@ -190,33 +204,35 @@ void DFHack::printJobDetails(Core *c, df::job *job)
 
     if (mat.isValid() || job->material_category.whole)
     {
-        c->con << "    material: " << mat.toString();
+        out << "    material: " << mat.toString();
         if (job->material_category.whole)
-            c->con << " (" << bitfieldToString(job->material_category) << ")";
-        c->con << endl;
+            out << " (" << bitfield_to_string(job->material_category) << ")";
+        out << endl;
     }
 
     if (job->item_subtype >= 0 || job->item_category.whole)
     {
         ItemTypeInfo iinfo(itype, job->item_subtype);
 
-        c->con << "    item: " << iinfo.toString()
-               << " (" << bitfieldToString(job->item_category) << ")" << endl;
+        out << "    item: " << iinfo.toString()
+               << " (" << bitfield_to_string(job->item_category) << ")" << endl;
     }
 
     if (job->hist_figure_id >= 0)
-        c->con << "    figure: " << job->hist_figure_id << endl;
+        out << "    figure: " << job->hist_figure_id << endl;
 
     if (!job->reaction_name.empty())
-        c->con << "    reaction: " << job->reaction_name << endl;
+        out << "    reaction: " << job->reaction_name << endl;
 
-    for (unsigned i = 0; i < job->job_items.size(); i++)
-        print_job_item_details(c, job, i, job->job_items[i]);
+    for (size_t i = 0; i < job->job_items.size(); i++)
+        printItemDetails(out, job->job_items[i], i);
 }
 
-df::building *DFHack::getJobHolder(df::job *job)
+df::building *DFHack::Job::getHolder(df::job *job)
 {
-    for (unsigned i = 0; i < job->references.size(); i++)
+    CHECK_NULL_POINTER(job);
+
+    for (size_t i = 0; i < job->references.size(); i++)
     {
         VIRTUAL_CAST_VAR(ref, df::general_ref_building_holderst, job->references[i]);
         if (ref)
@@ -226,7 +242,33 @@ df::building *DFHack::getJobHolder(df::job *job)
     return NULL;
 }
 
-bool DFHack::linkJobIntoWorld(df::job *job, bool new_id)
+df::unit *DFHack::Job::getWorker(df::job *job)
+{
+    CHECK_NULL_POINTER(job);
+
+    for (size_t i = 0; i < job->references.size(); i++)
+    {
+        VIRTUAL_CAST_VAR(ref, df::general_ref_unit_workerst, job->references[i]);
+        if (ref)
+            return ref->getUnit();
+    }
+
+    return NULL;
+}
+
+void DFHack::Job::checkBuildingsNow()
+{
+    if (df::global::process_jobs)
+        *df::global::process_jobs = true;
+}
+
+void DFHack::Job::checkDesignationsNow()
+{
+    if (df::global::process_dig)
+        *df::global::process_dig = true;
+}
+
+bool DFHack::Job::linkIntoWorld(df::job *job, bool new_id)
 {
     using df::global::world;
     using df::global::job_next_id;
@@ -253,4 +295,69 @@ bool DFHack::linkJobIntoWorld(df::job *job, bool new_id)
         linked_list_insert_after(ins_pos, job->list_link);
         return true;
     }
+}
+
+bool DFHack::Job::listNewlyCreated(std::vector<df::job*> *pvec, int *id_var)
+{
+    using df::global::world;
+    using df::global::job_next_id;
+
+    pvec->clear();
+
+    if (!job_next_id || *job_next_id <= *id_var)
+        return false;
+
+    int old_id = *id_var;
+    int cur_id = *job_next_id;
+
+    *id_var = cur_id;
+
+    pvec->reserve(std::min(20,cur_id - old_id));
+
+    df::job_list_link *link = world->job_list.next;
+    for (; link; link = link->next)
+    {
+        int id = link->item->id;
+        if (id >= old_id)
+            pvec->push_back(link->item);
+    }
+
+    return true;
+}
+
+bool DFHack::Job::attachJobItem(df::job *job, df::item *item,
+                                df::job_item_ref::T_role role,
+                                int filter_idx, int insert_idx)
+{
+    CHECK_NULL_POINTER(job);
+    CHECK_NULL_POINTER(item);
+
+    /*
+     * Functionality 100% reverse-engineered from DF code.
+     */
+
+    if (role != df::job_item_ref::TargetContainer)
+    {
+        if (item->flags.bits.in_job)
+            return false;
+
+        item->flags.bits.in_job = true;
+    }
+
+    auto item_link = new df::specific_ref();
+    item_link->type = specific_ref_type::JOB;
+    item_link->job = job;
+    item->specific_refs.push_back(item_link);
+
+    auto job_link = new df::job_item_ref();
+    job_link->item = item;
+    job_link->role = role;
+    job_link->job_item_idx = filter_idx;
+
+    if (size_t(insert_idx) < job->items.size())
+        vector_insert_at(job->items, insert_idx, job_link);
+    else
+        job->items.push_back(job_link);
+
+    return true;
 }

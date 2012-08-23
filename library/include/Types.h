@@ -28,6 +28,10 @@ distribution.
 #include "Pragma.h"
 #include "Export.h"
 
+#include "DataDefs.h"
+#include "df/general_ref.h"
+#include "df/specific_ref.h"
+
 namespace DFHack
 {
     struct t_matglossPair
@@ -40,38 +44,6 @@ namespace DFHack
     struct junk_fill
     {
         uint8_t data[SIZE];
-    };
-
-    // DF effects, by darius from the bay12 forum
-    enum EFFECT_TYPE
-    {
-        EFF_MIASMA=0,
-        EFF_WATER,
-        EFF_WATER2,
-        EFF_BLOOD,
-        EFF_DUST,
-        EFF_MAGMA,
-        EFF_SMOKE,
-        EFF_DRAGONFIRE,
-        EFF_FIRE,
-        EFF_WEBING,
-        EFF_BOILING, // uses matgloss
-        EFF_OCEANWAVE
-    };
-
-    struct t_effect_df40d //size 40
-    {
-        uint16_t type;
-        t_matglossPair material;
-        int16_t lifetime;
-        uint16_t x;
-        uint16_t y;
-        uint16_t z; //14
-        int16_t x_direction;
-        int16_t y_direction;
-        junk_fill <12> unk4;
-        uint8_t canCreateNew;//??
-        uint8_t isHidden;
     };
 
     struct t_name
@@ -101,4 +73,13 @@ namespace DFHack
         std::string name;
         uint32_t xpNxtLvl;
     };
+
+    DFHACK_EXPORT int getdir(std::string dir, std::vector<std::string> &files);
+    DFHACK_EXPORT bool hasEnding (std::string const &fullString, std::string const &ending);
+
+    DFHACK_EXPORT df::general_ref *findRef(std::vector<df::general_ref*> &vec, df::general_ref_type type);
+    DFHACK_EXPORT bool removeRef(std::vector<df::general_ref*> &vec, df::general_ref_type type, int id);
+
+    DFHACK_EXPORT df::specific_ref *findRef(std::vector<df::specific_ref*> &vec, df::specific_ref_type type);
+    DFHACK_EXPORT bool removeRef(std::vector<df::specific_ref*> &vec, df::specific_ref_type type, void *ptr);
 }// namespace DFHack

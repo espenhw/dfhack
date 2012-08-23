@@ -129,6 +129,21 @@ static int GetMod(lua_State *L)
         st.push(pos);
     return 1;
 }
+static int lua_malloc(lua_State *L)
+{
+	lua::state st(L);
+    size_t size=st.as<size_t>(1);
+    size_t pos=reinterpret_cast<size_t>(malloc(size));
+	st.push(pos);
+    return 1;
+}
+static int lua_malloc_free(lua_State *L)
+{
+	lua::state st(L);
+    size_t ptr=st.as<size_t>(1);
+    free(reinterpret_cast<void*>(ptr));
+    return 0;
+}
 #ifdef LINUX_BUILD
 static size_t __attribute__((stdcall))  PushValue(size_t ret,uint32_t eax,uint32_t ebx,uint32_t ecx,uint32_t edx,uint32_t edi,uint32_t esi,uint32_t esp,uint32_t ebp)
 #else
@@ -136,8 +151,6 @@ static size_t __stdcall PushValue(size_t ret,uint32_t eax,uint32_t ebx,uint32_t 
 #endif
 {
 	lua::state st=lua::glua::Get();
-	st.getglobal("err");
-	int perr=st.gettop();
 	st.getglobal("OnFunction");
 	if(st.is<lua::nil>())
 		return 0;
@@ -160,7 +173,7 @@ static size_t __stdcall PushValue(size_t ret,uint32_t eax,uint32_t ebx,uint32_t 
 	st.setfield("ebp");
 	st.push(ret);
 	st.setfield("ret");
-	st.pcall(1,1,perr);
+	DFHack::Lua::SafeCall(DFHack::Core::getInstance().getConsole(),st,1,1);
 	return st.as<uint32_t>();
 }
 static int Get_PushValue(lua_State *L)
@@ -195,8 +208,21 @@ static int Resume_Df(lua_State *L)
 	DFHack::Core::getInstance().Resume();
 	return 0;
 }
+static int Cast(lua_State *L)
+{
+	lua::state st(L);
+	if(DFHack::Lua::IsDFObject(st,1)!=DFHack::Lua::OBJ_TYPE)
+		st.error("First argument must be df type!");
+	if(!st.is<lua::number>(2)) //todo maybe lightuserdata?
+		st.error("Second argument must be pointer as a number!");
+	st.getfield("_identity",1);
+	DFHack::Lua::PushDFObject(st,(DFHack::type_identity*)lua_touserdata(st,-1),(void*)st.as<int>(2));
+	return 1;
+}
 const luaL_Reg lua_misc_func[]=
 {
+	{"alloc",lua_malloc},
+	{"free",lua_malloc_free},
 	{"loadmod",LoadMod},
 	{"getmod",GetMod},
 	{"loadobj",LoadObj},
@@ -207,6 +233,7 @@ const luaL_Reg lua_misc_func[]=
 	{"calldf",Call_Df},
 	{"suspend",Suspend_Df},
 	{"resume",Resume_Df},
+	{"cast",Cast},
 	{NULL,NULL}
 };
 void lua::RegisterMisc(lua::state &st)
@@ -219,5 +246,4 @@ void lua::RegisterMisc(lua::state &st)
 	}
 	lua::RegFunctionsLocal(st, lua_misc_func);
 	st.setglobal("engine");
-	luaopen_bit(st);
 }

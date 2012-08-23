@@ -29,7 +29,7 @@ distribution.
     #ifndef DFHACK_EXPORT
         #define DFHACK_EXPORT __attribute__ ((visibility("default")))
     #endif
-    #else
+#else
     #ifdef BUILD_DFHACK_LIB
         #ifndef DFHACK_EXPORT
             #define DFHACK_EXPORT __declspec(dllexport)
@@ -44,6 +44,8 @@ distribution.
 // C export macros for faking SDL and plugin exports
 #ifdef LINUX_BUILD
     #define DFhackCExport extern "C" __attribute__ ((visibility("default")))
+    #define DFhackDataExport __attribute__ ((visibility("default")))
 #else
     #define DFhackCExport extern "C" __declspec(dllexport)
+    #define DFhackDataExport extern "C" __declspec(dllexport)
 #endif

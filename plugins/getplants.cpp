@@ -23,29 +23,18 @@ using namespace df::enums;
 
 using df::global::world;
 
-DFhackCExport command_result df_getplants (Core * c, vector <string> & parameters)
+command_result df_getplants (color_ostream &out, vector <string> & parameters)
 {
     string plantMatStr = "";
     set<int> plantIDs;
     set<string> plantNames;
-    bool deselect = false, exclude = false, treesonly = false, shrubsonly = false;
+    bool deselect = false, exclude = false, treesonly = false, shrubsonly = false, all = false;
 
     int count = 0;
     for (size_t i = 0; i < parameters.size(); i++)
     {
         if(parameters[i] == "help" || parameters[i] == "?")
-        {
-            c->con.print("Specify the types of trees to cut down and/or shrubs to gather by their plant IDs, separated by spaces.\n"
-                "Options:\n"
-                "\t-t - Select trees only (exclude shrubs)\n"
-                "\t-s - Select shrubs only (exclude trees)\n"
-                "\t-c - Clear designations instead of setting them\n"
-                "\t-x - Apply selected action to all plants except those specified\n"
-                "Specifying both -t and -s will have no effect.\n"
-                "If no plant IDs are specified, all valid plant IDs will be listed.\n"
-                );
             return CR_WRONG_USAGE;
-        }
         else if(parameters[i] == "-t")
             treesonly = true;
         else if(parameters[i] == "-s")
@@ -54,21 +43,35 @@ DFhackCExport command_result df_getplants (Core * c, vector <string> & parameter
             deselect = true;
         else if(parameters[i] == "-x")
             exclude = true;
+        else if(parameters[i] == "-a")
+            all = true;
         else
             plantNames.insert(parameters[i]);
     }
     if (treesonly && shrubsonly)
     {
-        c->con.printerr("Cannot specify both -t and -s at the same time!\n");
+        out.printerr("Cannot specify both -t and -s at the same time!\n");
+        return CR_WRONG_USAGE;
+    }
+    if (all && exclude)
+    {
+        out.printerr("Cannot specify both -a and -x at the same time!\n");
+        return CR_WRONG_USAGE;
+    }
+    if (all && plantNames.size())
+    {
+        out.printerr("Cannot specify -a along with plant IDs!\n");
         return CR_WRONG_USAGE;
     }
 
-    CoreSuspender suspend(c);
+    CoreSuspender suspend;
 
-    for (int i = 0; i < world->raws.plants.all.size(); i++)
+    for (size_t i = 0; i < world->raws.plants.all.size(); i++)
     {
         df::plant_raw *plant = world->raws.plants.all[i];
-        if (plantNames.find(plant->id) != plantNames.end())
+        if (all)
+            plantIDs.insert(i);
+        else if (plantNames.find(plant->id) != plantNames.end())
         {
             plantNames.erase(plant->id);
             plantIDs.insert(i);
@@ -76,34 +79,34 @@ DFhackCExport command_result df_getplants (Core * c, vector <string> & parameter
     }
     if (plantNames.size() > 0)
     {
-        c->con.printerr("Invalid plant ID(s):");
+        out.printerr("Invalid plant ID(s):");
         for (set<string>::const_iterator it = plantNames.begin(); it != plantNames.end(); it++)
-            c->con.printerr(" %s", it->c_str());
-        c->con.printerr("\n");
+            out.printerr(" %s", it->c_str());
+        out.printerr("\n");
         return CR_FAILURE;
     }
 
     if (plantIDs.size() == 0)
     {
-        c->con.print("Valid plant IDs:\n");
-        for (int i = 0; i < world->raws.plants.all.size(); i++)
+        out.print("Valid plant IDs:\n");
+        for (size_t i = 0; i < world->raws.plants.all.size(); i++)
         {
             df::plant_raw *plant = world->raws.plants.all[i];
             if (plant->flags.is_set(plant_raw_flags::GRASS))
                 continue;
-            c->con.print("* (%s) %s - %s\n", plant->flags.is_set(plant_raw_flags::TREE) ? "tree" : "shrub", plant->id.c_str(), plant->name.c_str());
+            out.print("* (%s) %s - %s\n", plant->flags.is_set(plant_raw_flags::TREE) ? "tree" : "shrub", plant->id.c_str(), plant->name.c_str());
         }
         return CR_OK;
     }
 
     count = 0;
-    for (int i = 0; i < world->map.map_blocks.size(); i++)
+    for (size_t i = 0; i < world->map.map_blocks.size(); i++)
     {
         df::map_block *cur = world->map.map_blocks[i];
         bool dirty = false;
-        for (int j = 0; j < cur->plants.size(); j++)
+        for (size_t j = 0; j < cur->plants.size(); j++)
         {
-            const df::plant *plant = cur->plants[i];
+            const df::plant *plant = cur->plants[j];
             int x = plant->pos.x % 16;
             int y = plant->pos.y % 16;
             if (plantIDs.find(plant->material) != plantIDs.end())
@@ -116,10 +119,11 @@ DFhackCExport command_result df_getplants (Core * c, vector <string> & parameter
                 if (!exclude)
                     continue;
             }
-            TileShape shape = tileShape(cur->tiletype[x][y]);
-            if (plant->flags.bits.is_shrub && (treesonly || shape != SHRUB_OK))
+            df::tiletype_shape shape = tileShape(cur->tiletype[x][y]);
+            df::tiletype_special special = tileSpecial(cur->tiletype[x][y]);
+            if (plant->flags.bits.is_shrub && (treesonly || !(shape == tiletype_shape::SHRUB && special != tiletype_special::DEAD)))
                 continue;
-            if (!plant->flags.bits.is_shrub && (shrubsonly || (shape != TREE_OK && shape != TREE_DEAD)))
+            if (!plant->flags.bits.is_shrub && (shrubsonly || !(shape == tiletype_shape::TREE)))
                 continue;
             if (cur->designation[x][y].bits.hidden)
                 continue;
@@ -137,26 +141,35 @@ DFhackCExport command_result df_getplants (Core * c, vector <string> & parameter
             }
         }
         if (dirty)
-            cur->flags.set(block_flags::Designated);
+            cur->flags.bits.designated = true;
     }
     if (count)
-        c->con.print("Updated %d plant designations.\n", count);
+        out.print("Updated %d plant designations.\n", count);
     return CR_OK;
 }
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "getplants";
-}
+DFHACK_PLUGIN("getplants");
 
-DFhackCExport command_result plugin_init ( Core * c, vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init ( color_ostream &out, vector <PluginCommand> &commands)
 {
-    commands.clear();
-    commands.push_back(PluginCommand("getplants", "Cut down all of the specified trees or gather all of the specified shrubs", df_getplants));
+    commands.push_back(PluginCommand(
+        "getplants", "Cut down all of the specified trees or gather specified shrubs",
+        df_getplants, false,
+        "  Specify the types of trees to cut down and/or shrubs to gather by their\n"
+        "  plant IDs, separated by spaces.\n"
+        "Options:\n"
+        "  -t - Select trees only (exclude shrubs)\n"
+        "  -s - Select shrubs only (exclude trees)\n"
+        "  -c - Clear designations instead of setting them\n"
+        "  -x - Apply selected action to all plants except those specified\n"
+        "  -a - Select every type of plant (obeys -t/-s)\n"
+        "Specifying both -t and -s will have no effect.\n"
+        "If no plant IDs are specified, all valid plant IDs will be listed.\n"
+    ));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }

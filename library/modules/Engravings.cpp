@@ -39,7 +39,6 @@ using namespace std;
 #include "df/world.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
 using df::global::world;
 
 bool Engravings::isValid()
@@ -54,14 +53,14 @@ uint32_t Engravings::getCount()
 
 df::engraving * Engravings::getEngraving(int index)
 {
-    if (index < 0 || index >= getCount())
+    if (uint32_t(index) >= getCount())
         return NULL;
     return world->engravings[index];
 }
 
 bool Engravings::copyEngraving(const int32_t index, t_engraving &out)
 {
-    if (index < 0 || index >= getCount())
+    if (uint32_t(index) >= getCount())
         return false;
 
     out.origin = world->engravings[index];
@@ -72,8 +71,8 @@ bool Engravings::copyEngraving(const int32_t index, t_engraving &out)
     out.pos = out.origin->pos;
     out.flags = out.origin->flags;
     out.tile = out.origin->tile;
-    out.type = out.origin->type;
-    out.subtype = out.origin->subtype;
+    out.art_id = out.origin->art_id;
+    out.art_subid = out.origin->art_subid;
     out.quality = out.origin->quality;
     return true;
 }

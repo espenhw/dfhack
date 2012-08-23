@@ -162,8 +162,8 @@ public:
     };
 };
 
-DFhackCExport command_result df_tiles (Core * c, vector <string> & parameters);
-DFhackCExport command_result df_paint (Core * c, vector <string> & parameters);
+command_result df_tiles (Core * c, vector <string> & parameters);
+command_result df_paint (Core * c, vector <string> & parameters);
 
 struct Settings
 {
@@ -199,14 +199,10 @@ struct Settings
     Brush * brush;
 } settings;
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "tiles";
-}
+DFHACK_PLUGIN("tiles");
 
 DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("tiles", "A tile painter. See 'tile help' for details.", df_tiles));
     commands.push_back(PluginCommand("paint", "Paint with the current tiles settings.", df_paint));
     return CR_OK;
@@ -217,7 +213,7 @@ DFhackCExport command_result plugin_shutdown ( Core * c )
     return CR_OK;
 }
 
-DFhackCExport command_result df_tiles (Core * c, vector <string> & parameters)
+command_result df_tiles (Core * c, vector <string> & parameters)
 {
     int32_t x,y,z;
     uint32_t x_max,y_max,z_max;

@@ -10,46 +10,39 @@ using std::vector;
 using std::string;
 using namespace DFHack;
 
-DFhackCExport command_result df_notes (Core * c, vector <string> & parameters);
+command_result df_notes (color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "notes";
-}
+DFHACK_PLUGIN("notes");
 
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("dumpnotes",
                "Dumps in-game notes",
                df_notes));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
-DFhackCExport command_result df_notes (Core * c, vector <string> & parameters)
+command_result df_notes (color_ostream &con, vector <string> & parameters)
 {
-    Console & con = c->con;
-    c->Suspend();
+    CoreSuspender suspend;
 
-    DFHack::Notes * note_mod = c->getNotes();
+    DFHack::Notes * note_mod = Core::getInstance().getNotes();
     std::vector<t_note*>* note_list = note_mod->notes;
 
     if (note_list == NULL)
     {
         con.printerr("Notes are not supported under this version of DF.\n");
-        c->Resume();
         return CR_OK;
     }
 
     if (note_list->empty())
     {
         con << "There are no notes." << std::endl;
-        c->Resume();
         return CR_OK;
     }
 
@@ -75,6 +68,5 @@ DFhackCExport command_result df_notes (Core * c, vector <string> & parameters)
         con << std::endl;
     }
 
-    c->Resume();
     return CR_OK;
 }

@@ -37,8 +37,6 @@ distribution.
  */
 namespace DFHack
 {
-namespace Simple
-{
 namespace Engravings
 {
 // "Simplified" copy of engraving
@@ -49,8 +47,8 @@ struct t_engraving {
     df::coord pos;
     df::engraving_flags flags;
     int8_t tile;
-    int32_t type;
-    int16_t subtype;
+    int32_t art_id;
+    int16_t art_subid;
     df::item_quality quality;
     // Pointer to original object, in case you want to modify it
     df::engraving *origin;
@@ -60,7 +58,6 @@ DFHACK_EXPORT bool isValid();
 DFHACK_EXPORT uint32_t getCount();
 DFHACK_EXPORT bool copyEngraving (const int32_t index, t_engraving &out);
 DFHACK_EXPORT df::engraving * getEngraving (const int32_t index);
-}
 }
 }
 #endif

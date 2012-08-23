@@ -145,7 +145,7 @@ protected:
 // END item choosers
 //////////////////////
 
-DFhackCExport command_result df_dumpitems (Core * c, vector <string> & parameters);
+command_result df_dumpitems (Core * c, vector <string> & parameters);
 
 DFhackCExport const char * plugin_name ( void )
 {
@@ -155,7 +155,6 @@ DFhackCExport const char * plugin_name ( void )
 DFhackCExport command_result plugin_init ( Core * c,
                                            std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("dumpitems",
                "Dump items\
 \n              Options:\
@@ -169,7 +168,7 @@ DFhackCExport command_result plugin_shutdown ( Core * c )
     return CR_OK;
 }
 
-DFhackCExport command_result df_dumpitems (Core * c, vector <string> & parameters)
+command_result df_dumpitems (Core * c, vector <string> & parameters)
 {
     c->Suspend();
     DFHack::Materials * Materials = c->getMaterials();

@@ -18,43 +18,66 @@ using namespace DFHack;
 using namespace df::enums;
 
 //Function pointer type for whole-map tile checks.
-typedef void (*checkTile)(DFHack::DFCoord, MapExtras::MapCache &);
+typedef void (*checkTile)(DFCoord, MapExtras::MapCache &);
 
 //Forward Declarations for Commands
-DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::string> & params);
-DFhackCExport command_result alltraffic(DFHack::Core * c, std::vector<std::string> & params);
+command_result filltraffic(color_ostream &out, std::vector<std::string> & params);
+command_result alltraffic(color_ostream &out, std::vector<std::string> & params);
 
 //Forward Declarations for Utility Functions
-DFhackCExport command_result setAllMatching(DFHack::Core * c, checkTile checkProc,
-    DFHack::DFCoord minCoord = DFHack::DFCoord(0, 0, 0),
-    DFHack::DFCoord maxCoord = DFHack::DFCoord(0xFFFF, 0xFFFF, 0xFFFF));
+command_result setAllMatching(color_ostream &out, checkTile checkProc,
+                              DFCoord minCoord = DFCoord(0, 0, 0),
+                              DFCoord maxCoord = DFCoord(0xFFFF, 0xFFFF, 0xFFFF));
 
-void allHigh(DFHack::DFCoord coord, MapExtras::MapCache & map);
-void allNormal(DFHack::DFCoord coord, MapExtras::MapCache & map);
-void allLow(DFHack::DFCoord coord, MapExtras::MapCache & map);
-void allRestricted(DFHack::DFCoord coord, MapExtras::MapCache & map);
+void allHigh(DFCoord coord, MapExtras::MapCache & map);
+void allNormal(DFCoord coord, MapExtras::MapCache & map);
+void allLow(DFCoord coord, MapExtras::MapCache & map);
+void allRestricted(DFCoord coord, MapExtras::MapCache & map);
 
-DFhackCExport const char * plugin_name ( void )
+DFHACK_PLUGIN("filltraffic");
+
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "filltraffic";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
-    commands.push_back(PluginCommand("filltraffic","Flood-fill with selected traffic designation from cursor",filltraffic));
-    commands.push_back(PluginCommand("alltraffic","Set traffic for the entire map",alltraffic));
-
+    commands.push_back(PluginCommand(
+        "filltraffic","Flood-fill with selected traffic designation from cursor",
+        filltraffic, Gui::cursor_hotkey,
+        "  Flood-fill selected traffic type from the cursor.\n"
+        "Traffic Type Codes:\n"
+        "  H: High Traffic\n"
+        "  N: Normal Traffic\n"
+        "  L: Low Traffic\n"
+        "  R: Restricted Traffic\n"
+        "Other Options:\n"
+        "  X: Fill across z-levels.\n"
+        "  B: Include buildings and stockpiles.\n"
+        "  P: Include empty space.\n"
+        "Example:\n"
+        "  filltraffic H\n"
+        "    When used in a room with doors,\n"
+        "    it will set traffic to HIGH in just that room.\n"
+    ));
+    commands.push_back(PluginCommand(
+        "alltraffic","Set traffic for the entire map",
+        alltraffic, false,
+        "  Set traffic types for all tiles on the map.\n"
+        "Traffic Type Codes:\n"
+        "  H: High Traffic\n"
+        "  N: Normal Traffic\n"
+        "  L: Low Traffic\n"
+        "  R: Restricted Traffic\n"
+    ));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
-DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::string> & params)
+command_result filltraffic(color_ostream &out, std::vector<std::string> & params)
 {
+    // HOTKEY COMMAND; CORE ALREADY SUSPENDED
+
     //Maximum map size.
     uint32_t x_max,y_max,z_max;
     //Source and target traffic types.
@@ -66,26 +89,10 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
     bool checkbuilding = true;
 
     //Loop through parameters
-    for(int i = 0; i < params.size();i++)
+    for(size_t i = 0; i < params.size();i++)
     {
-        if(params[i] == "help" || params[i] == "?")
-        {
-            c->con.print("Flood-fill selected traffic type from the cursor.\n"
-                "Traffic Type Codes:\n"
-                "\tH: High Traffic\n"
-                "\tN: Normal Traffic\n"
-                "\tL: Low Traffic\n"
-                "\tR: Restricted Traffic\n"
-                "Other Options:\n"
-                "\tX: Fill across z-levels.\n"
-                "\tB: Include buildings and stockpiles.\n"
-                "\tP: Include empty space.\n"
-                "Example:\n"
-                "'filltraffic H' - When used in a room with doors,\n"
-                "                  it will set traffic to HIGH in just that room."
-                );
-            return CR_OK;
-        }
+        if (params[i] == "help" || params[i] == "?" || params[i].size() != 1)
+            return CR_WRONG_USAGE;
 
         switch (toupper(params[i][0]))
         {
@@ -103,16 +110,14 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
             checkbuilding = false; break;
         case 'P':
             checkpit = false; break;
+        default:
+            return CR_WRONG_USAGE;
         }
     }
 
-    //Initialization.
-    CoreSuspender suspend(c);
-
-    DFHack::Gui * Gui = c->getGui();
     if (!Maps::IsValid())
     {
-        c->con.printerr("Map is not available!\n");
+        out.printerr("Map is not available!\n");
         return CR_FAILURE;
     }
 
@@ -120,18 +125,18 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
     Maps::getSize(x_max,y_max,z_max);
     uint32_t tx_max = x_max * 16;
     uint32_t ty_max = y_max * 16;
-    Gui->getCursorCoords(cx,cy,cz);
+    Gui::getCursorCoords(cx,cy,cz);
     while(cx == -30000)
     {
-        c->con.printerr("Cursor is not active.\n");
+        out.printerr("Cursor is not active.\n");
         return CR_FAILURE;
     }
 
-    DFHack::DFCoord xy ((uint32_t)cx,(uint32_t)cy,cz);
+    DFCoord xy ((uint32_t)cx,(uint32_t)cy,cz);
     MapExtras::MapCache MCache;
 
     df::tile_designation des = MCache.designationAt(xy);
-    int16_t tt = MCache.tiletypeAt(xy);
+    df::tiletype tt = MCache.tiletypeAt(xy);
     df::tile_occupancy oc;
 
     if (checkbuilding)
@@ -140,32 +145,32 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
     source = (df::tile_traffic)des.bits.traffic;
     if(source == target)
     {
-        c->con.printerr("This tile is already set to the target traffic type.\n");
+        out.printerr("This tile is already set to the target traffic type.\n");
         return CR_FAILURE;
     }
 
-    if(DFHack::isWallTerrain(tt))
+    if(isWallTerrain(tt))
     {
-        c->con.printerr("This tile is a wall. Please select a passable tile.\n");
+        out.printerr("This tile is a wall. Please select a passable tile.\n");
         return CR_FAILURE;
     }
 
-    if(checkpit && DFHack::isOpenTerrain(tt))
+    if(checkpit && isOpenTerrain(tt))
     {
-        c->con.printerr("This tile is a hole. Please select a passable tile.\n");
+        out.printerr("This tile is a hole. Please select a passable tile.\n");
         return CR_FAILURE;
     }
 
     if(checkbuilding && oc.bits.building)
     {
-        c->con.printerr("This tile contains a building. Please select an empty tile.\n");
+        out.printerr("This tile contains a building. Please select an empty tile.\n");
         return CR_FAILURE;
     }
 
-    c->con.print("%d/%d/%d  ... FILLING!\n", cx,cy,cz);
+    out.print("%d/%d/%d  ... FILLING!\n", cx,cy,cz);
 
     //Naive four-way or six-way flood fill with possible tiles on a stack.
-    stack <DFHack::DFCoord> flood;
+    stack <DFCoord> flood;
     flood.push(xy);
 
     while(!flood.empty())
@@ -178,8 +183,8 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
 
         tt = MCache.tiletypeAt(xy);
 
-        if(DFHack::isWallTerrain(tt)) continue;
-        if(checkpit && DFHack::isOpenTerrain(tt)) continue;
+        if(isWallTerrain(tt)) continue;
+        if(checkpit && isOpenTerrain(tt)) continue;
 
         if (checkbuilding)
         {
@@ -195,30 +200,30 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
 
             if (xy.x > 0)
             {
-                flood.push(DFHack::DFCoord(xy.x - 1, xy.y, xy.z));
+                flood.push(DFCoord(xy.x - 1, xy.y, xy.z));
             }
             if (xy.x < tx_max - 1)
             {
-                flood.push(DFHack::DFCoord(xy.x + 1, xy.y, xy.z));
+                flood.push(DFCoord(xy.x + 1, xy.y, xy.z));
             }
             if (xy.y > 0)
             {
-                flood.push(DFHack::DFCoord(xy.x, xy.y - 1, xy.z));
+                flood.push(DFCoord(xy.x, xy.y - 1, xy.z));
             }
             if (xy.y < ty_max - 1)
             {
-                flood.push(DFHack::DFCoord(xy.x, xy.y + 1, xy.z));
+                flood.push(DFCoord(xy.x, xy.y + 1, xy.z));
             }
 
             if (updown)
             {
-                if (xy.z > 0 && DFHack::LowPassable(tt))
+                if (xy.z > 0 && LowPassable(tt))
                 {
-                    flood.push(DFHack::DFCoord(xy.x, xy.y, xy.z - 1));
+                    flood.push(DFCoord(xy.x, xy.y, xy.z - 1));
                 }
-                if (xy.z < z_max && DFHack::HighPassable(tt))
+                if (xy.z < z_max && HighPassable(tt))
                 {
-                    flood.push(DFHack::DFCoord(xy.x, xy.y, xy.z + 1));
+                    flood.push(DFCoord(xy.x, xy.y, xy.z + 1));
                 }
             }
 
@@ -231,24 +236,15 @@ DFhackCExport command_result filltraffic(DFHack::Core * c, std::vector<std::stri
 
 enum e_checktype {no_check, check_equal, check_nequal};
 
-DFhackCExport command_result alltraffic(DFHack::Core * c, std::vector<std::string> & params)
+command_result alltraffic(color_ostream &out, std::vector<std::string> & params)
 {
-    void (*proc)(DFHack::DFCoord, MapExtras::MapCache &) = allNormal;
+    void (*proc)(DFCoord, MapExtras::MapCache &) = allNormal;
 
     //Loop through parameters
-    for(int i = 0; i < params.size();i++)
+    for(size_t i = 0; i < params.size();i++)
     {
-        if(params[i] == "help" || params[i] == "?")
-        {
-            c->con.print("Set traffic types for all tiles on the map.\n"
-                "Traffic Type Codes:\n"
-                "	H: High Traffic\n"
-                "	N: Normal Traffic\n"
-                "	L: Low Traffic\n"
-                "	R: Restricted Traffic\n"
-                );
-            return CR_OK;
-        }
+        if (params[i] == "help" || params[i] == "?" || params[i].size() != 1)
+            return CR_WRONG_USAGE;
 
         //Pick traffic type. Possibly set bounding rectangle later.
         switch (toupper(params[i][0]))
@@ -261,26 +257,27 @@ DFhackCExport command_result alltraffic(DFHack::Core * c, std::vector<std::strin
             proc = allLow; break;
         case 'R':
             proc = allRestricted; break;
+        default:
+            return CR_WRONG_USAGE;
         }
     }
 
-    return setAllMatching(c, proc);
+    return setAllMatching(out, proc);
 }
 
 //Helper function for writing new functions that check every tile on the map.
 //newTraffic is the traffic designation to set.
 //check takes a coordinate and the map cache as arguments, and returns true if the criteria is met.
 //minCoord and maxCoord can be used to specify a bounding cube.
-DFhackCExport command_result setAllMatching(DFHack::Core * c, checkTile checkProc,
-    DFHack::DFCoord minCoord, DFHack::DFCoord maxCoord)
+command_result setAllMatching(color_ostream &out, checkTile checkProc,
+                              DFCoord minCoord, DFCoord maxCoord)
 {
     //Initialization.
-    CoreSuspender suspend(c);
+    CoreSuspender suspend;
 
-    DFHack::Gui * Gui = c->getGui();
     if (!Maps::IsValid())
     {
-        c->con.printerr("Map is not available!\n");
+        out.printerr("Map is not available!\n");
         return CR_FAILURE;
     }
 
@@ -298,23 +295,23 @@ DFhackCExport command_result setAllMatching(DFHack::Core * c, checkTile checkPro
     //Check minimum co-ordinates against maximum map size
     if (minCoord.x > maxCoord.x)
     {
-        c->con.printerr("Minimum x coordinate is greater than maximum x coordinate.\n");
+        out.printerr("Minimum x coordinate is greater than maximum x coordinate.\n");
         return CR_FAILURE;
     }
     if (minCoord.y > maxCoord.y)
     {
-        c->con.printerr("Minimum y coordinate is greater than maximum y coordinate.\n");
+        out.printerr("Minimum y coordinate is greater than maximum y coordinate.\n");
         return CR_FAILURE;
     }
     if (minCoord.z > maxCoord.y)
     {
-        c->con.printerr("Minimum z coordinate is greater than maximum z coordinate.\n");
+        out.printerr("Minimum z coordinate is greater than maximum z coordinate.\n");
         return CR_FAILURE;
     }
 
     MapExtras::MapCache MCache;
 
-    c->con.print("Setting traffic...\n");
+    out.print("Setting traffic...\n");
 
     //Loop through every single tile
     for(uint32_t x = minCoord.x; x <= maxCoord.x; x++)
@@ -323,37 +320,37 @@ DFhackCExport command_result setAllMatching(DFHack::Core * c, checkTile checkPro
         {
             for(uint32_t z = minCoord.z; z <= maxCoord.z; z++)
             {
-                DFHack::DFCoord tile = DFHack::DFCoord(x, y, z);
+                DFCoord tile = DFCoord(x, y, z);
                 checkProc(tile, MCache);
             }
         }
     }
 
     MCache.WriteAll();
-    c->con.print("Complete!\n");
+    out.print("Complete!\n");
     return CR_OK;
 }
 
 //Unconditionally set map to target traffic type
-void allHigh(DFHack::DFCoord coord, MapExtras::MapCache &map)
+void allHigh(DFCoord coord, MapExtras::MapCache &map)
 {
     df::tile_designation des = map.designationAt(coord);
     des.bits.traffic = tile_traffic::High;
     map.setDesignationAt(coord, des);
 }
-void allNormal(DFHack::DFCoord coord, MapExtras::MapCache &map)
+void allNormal(DFCoord coord, MapExtras::MapCache &map)
 {
     df::tile_designation des = map.designationAt(coord);
     des.bits.traffic = tile_traffic::Normal;
     map.setDesignationAt(coord, des);
 }
-void allLow(DFHack::DFCoord coord, MapExtras::MapCache &map)
+void allLow(DFCoord coord, MapExtras::MapCache &map)
 {
     df::tile_designation des = map.designationAt(coord);
     des.bits.traffic = tile_traffic::Low;
     map.setDesignationAt(coord, des);
 }
-void allRestricted(DFHack::DFCoord coord, MapExtras::MapCache &map)
+void allRestricted(DFCoord coord, MapExtras::MapCache &map)
 {
     df::tile_designation des = map.designationAt(coord);
     des.bits.traffic = tile_traffic::Restricted;

@@ -43,31 +43,6 @@ distribution.
 #include "Hooks.h"
 #include <iostream>
 
-/*
- * Plugin loading functions
- */
-namespace DFHack
-{
-    DFLibrary * OpenPlugin (const char * filename)
-    {
-        dlerror();
-        DFLibrary * ret =  (DFLibrary *) dlopen(filename, RTLD_NOW);
-        if(!ret)
-        {
-            std::cerr << dlerror() << std::endl;
-        }
-        return ret;
-    }
-    void * LookupPlugin (DFLibrary * plugin ,const char * function)
-    {
-        return (DFLibrary *) dlsym((void *)plugin, function);
-    }
-    void ClosePlugin (DFLibrary * plugin)
-    {
-        dlclose((void *) plugin);
-    }
-}
-
 /*******************************************************************************
 *                           SDL part starts here                               *
 *******************************************************************************/
@@ -94,12 +69,18 @@ DFhackCExport void SDL_Quit(void)
 static int (*_SDL_PollEvent)(SDL::Event* event) = 0;
 DFhackCExport int SDL_PollEvent(SDL::Event* event)
 {
+    pollevent_again:
+    // if SDL returns 0 here, it means there are no more events. return 0
     int orig_return = _SDL_PollEvent(event);
-    // if the event is valid, intercept
-    if( event != 0 )
+    if(!orig_return)
+        return 0;
+    // otherwise we have an event to filter
+    else if( event != 0 )
     {
         DFHack::Core & c = DFHack::Core::getInstance();
-        return c.SDL_Event(event, orig_return);
+        // if we consume the event, ask SDL for more.
+        if(!c.DFH_SDL_Event(event))
+            goto pollevent_again;
     }
     return orig_return;
 }
@@ -160,24 +141,3 @@ DFhackCExport int SDL_Init(uint32_t flags)
     int ret = _SDL_Init(flags);
     return ret;
 }
-
-#ifdef MALLOC_FILL
-DFhackCExport void * malloc(size_t size)
-{
-    static void* (*real_malloc)(size_t) = NULL;
-    if (!real_malloc)
-        real_malloc = (void * (*)( size_t )) dlsym(RTLD_NEXT, "malloc");
-    // check if we got them
-    if(!real_malloc)
-    {
-        // bail, this would be a disaster otherwise
-        exit(1);
-    }
-    void * ret = real_malloc(size);
-    if(ret)
-    {
-        memset(ret, 0xCC, size);
-    }
-    return ret;
-}
-#endif

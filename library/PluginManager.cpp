@@ -26,9 +26,15 @@ distribution.
 #include "Core.h"
 #include "MemAccess.h"
 #include "PluginManager.h"
+#include "RemoteServer.h"
 #include "Console.h"
+#include "Types.h"
 
 #include "DataDefs.h"
+#include "MiscUtils.h"
+
+#include "LuaWrapper.h"
+#include "LuaTools.h"
 
 using namespace DFHack;
 
@@ -40,41 +46,8 @@ using namespace std;
 #include "tinythread.h"
 using namespace tthread;
 
-#ifdef LINUX_BUILD
-    #include <dirent.h>
-    #include <errno.h>
-#else
-    #include "wdirent.h"
-#endif
-
 #include <assert.h>
 
-static int getdir (string dir, vector<string> &files)
-{
-    DIR *dp;
-    struct dirent *dirp;
-    if((dp  = opendir(dir.c_str())) == NULL)
-    {
-        return errno;
-    }
-    while ((dirp = readdir(dp)) != NULL) {
-    files.push_back(string(dirp->d_name));
-    }
-    closedir(dp);
-    return 0;
-}
-
-bool hasEnding (std::string const &fullString, std::string const &ending)
-{
-    if (fullString.length() > ending.length())
-    {
-        return (0 == fullString.compare (fullString.length() - ending.length(), ending.length(), ending));
-    }
-    else
-    {
-        return false;
-    }
-}
 struct Plugin::RefLock
 {
     RefLock()
@@ -105,8 +78,8 @@ struct Plugin::RefLock
     void lock_sub()
     {
         mut->lock();
-        refcount --;
-        wakeup->notify_one();
+        if (--refcount == 0)
+            wakeup->notify_one();
         mut->unlock();
     }
     void wait()
@@ -120,25 +93,40 @@ struct Plugin::RefLock
     mutex * mut;
     int refcount;
 };
+
+struct Plugin::RefAutolock
+{
+    RefLock * lock;
+    RefAutolock(RefLock * lck):lock(lck){ lock->lock(); };
+    ~RefAutolock(){ lock->unlock(); };
+};
+
+struct Plugin::RefAutoinc
+{
+    RefLock * lock;
+    RefAutoinc(RefLock * lck):lock(lck){ lock->lock_add(); };
+    ~RefAutoinc(){ lock->lock_sub(); };
+};
+
 Plugin::Plugin(Core * core, const std::string & filepath, const std::string & _filename, PluginManager * pm)
 {
     filename = filepath;
     parent = pm;
     name.reserve(_filename.size());
-    for(int i = 0; i < _filename.size();i++)
+    for(size_t i = 0; i < _filename.size();i++)
     {
         char ch = _filename[i];
         if(ch == '.')
             break;
         name.append(1,ch);
     }
-    Console & con = core->con;
     plugin_lib = 0;
     plugin_init = 0;
     plugin_shutdown = 0;
     plugin_status = 0;
     plugin_onupdate = 0;
     plugin_onstatechange = 0;
+    plugin_rpcconnect = 0;
     state = PS_UNLOADED;
     access = new RefLock();
 }
@@ -147,91 +135,105 @@ Plugin::~Plugin()
 {
     if(state == PS_LOADED)
     {
-        unload();
+        unload(Core::getInstance().getConsole());
     }
     delete access;
 }
 
-bool Plugin::load()
+bool Plugin::load(color_ostream &con)
 {
-    access->lock();
+    RefAutolock lock(access);
     if(state == PS_BROKEN)
     {
-        access->unlock();
         return false;
     }
     else if(state == PS_LOADED)
     {
-        access->unlock();
         return true;
     }
-    Core & c = Core::getInstance();
-    Console & con = c.con;
     DFLibrary * plug = OpenPlugin(filename.c_str());
     if(!plug)
     {
         con.printerr("Can't load plugin %s\n", filename.c_str());
         state = PS_BROKEN;
-        access->unlock();
         return false;
     }
-    const char * (*_PlugName)() =(const char * (*)()) LookupPlugin(plug, "plugin_name");
-    if(!_PlugName)
+    const char ** plug_name =(const char ** ) LookupPlugin(plug, "name");
+    const char ** plug_version =(const char ** ) LookupPlugin(plug, "version");
+    if(!plug_name || !plug_version)
     {
-        con.printerr("Plugin %s has no name.\n", filename.c_str());
+        con.printerr("Plugin %s has no name or version.\n", filename.c_str());
         ClosePlugin(plug);
         state = PS_BROKEN;
-        access->unlock();
         return false;
     }
-    plugin_init = (command_result (*)(Core *, std::vector <PluginCommand> &)) LookupPlugin(plug, "plugin_init");
+    if(strcmp(DFHACK_VERSION, *plug_version) != 0)
+    {
+        con.printerr("Plugin %s was not built for this version of DFHack.\n"
+                     "Plugin: %s, DFHack: %s\n", *plug_name, *plug_version, DFHACK_VERSION);
+        ClosePlugin(plug);
+        state = PS_BROKEN;
+        return false;
+    }
+    plugin_init = (command_result (*)(color_ostream &, std::vector <PluginCommand> &)) LookupPlugin(plug, "plugin_init");
     if(!plugin_init)
     {
         con.printerr("Plugin %s has no init function.\n", filename.c_str());
         ClosePlugin(plug);
         state = PS_BROKEN;
-        access->unlock();
         return false;
     }
-    plugin_status = (command_result (*)(Core *, std::string &)) LookupPlugin(plug, "plugin_status");
-    plugin_onupdate = (command_result (*)(Core *)) LookupPlugin(plug, "plugin_onupdate");
-    plugin_shutdown = (command_result (*)(Core *)) LookupPlugin(plug, "plugin_shutdown");
-    plugin_onstatechange = (command_result (*)(Core *, state_change_event)) LookupPlugin(plug, "plugin_onstatechange");
-    //name = _PlugName();
+    plugin_status = (command_result (*)(color_ostream &, std::string &)) LookupPlugin(plug, "plugin_status");
+    plugin_onupdate = (command_result (*)(color_ostream &)) LookupPlugin(plug, "plugin_onupdate");
+    plugin_shutdown = (command_result (*)(color_ostream &)) LookupPlugin(plug, "plugin_shutdown");
+    plugin_onstatechange = (command_result (*)(color_ostream &, state_change_event)) LookupPlugin(plug, "plugin_onstatechange");
+    plugin_rpcconnect = (RPCService* (*)(color_ostream &)) LookupPlugin(plug, "plugin_rpcconnect");
+    plugin_eval_ruby = (command_result (*)(color_ostream &, const char*)) LookupPlugin(plug, "plugin_eval_ruby");
+    index_lua(plug);
+    this->name = *plug_name;
     plugin_lib = plug;
-    if(plugin_init(&c,commands) == CR_OK)
+    commands.clear();
+    if(plugin_init(con,commands) == CR_OK)
     {
         state = PS_LOADED;
         parent->registerCommands(this);
-        access->unlock();
         return true;
     }
     else
     {
         con.printerr("Plugin %s has failed to initialize properly.\n", filename.c_str());
+        reset_lua();
         ClosePlugin(plugin_lib);
         state = PS_BROKEN;
-        access->unlock();
         return false;
     }
-    // not reachable
 }
 
-bool Plugin::unload()
+bool Plugin::unload(color_ostream &con)
 {
-    Core & c = Core::getInstance();
-    Console & con = c.con;
     // get the mutex
     access->lock();
     // if we are actually loaded
     if(state == PS_LOADED)
     {
-        // notify plugin about shutdown
-        command_result cr = plugin_shutdown(&Core::getInstance());
+        // notify the plugin about an attempt to shutdown
+        if (plugin_onstatechange &&
+            plugin_onstatechange(con, SC_BEGIN_UNLOAD) == CR_NOT_FOUND)
+        {
+            con.printerr("Plugin %s has refused to be unloaded.\n", name.c_str());
+            access->unlock();
+            return false;
+        }
         // wait for all calls to finish
         access->wait();
+        // notify plugin about shutdown, if it has a shutdown function
+        command_result cr = CR_OK;
+        if(plugin_shutdown)
+            cr = plugin_shutdown(con);
         // cleanup...
+        reset_lua();
         parent->unregisterCommands(this);
+        commands.clear();
         if(cr == CR_OK)
         {
             ClosePlugin(plugin_lib);
@@ -256,32 +258,32 @@ bool Plugin::unload()
     return false;
 }
 
-bool Plugin::reload()
+bool Plugin::reload(color_ostream &out)
 {
     if(state != PS_LOADED)
         return false;
-    if(!unload())
+    if(!unload(out))
         return false;
-    if(!load())
+    if(!load(out))
         return false;
     return true;
 }
 
-command_result Plugin::invoke( std::string & command, std::vector <std::string> & parameters, bool interactive_)
+command_result Plugin::invoke(color_ostream &out, const std::string & command, std::vector <std::string> & parameters)
 {
     Core & c = Core::getInstance();
     command_result cr = CR_NOT_IMPLEMENTED;
     access->lock_add();
     if(state == PS_LOADED)
     {
-        for (int i = 0; i < commands.size();i++)
+        for (size_t i = 0; i < commands.size();i++)
         {
             PluginCommand &cmd = commands[i];
             if(cmd.name == command)
             {
                 // running interactive things from some other source than the console would break it
-                if(!interactive_ && cmd.interactive)
-                    cr = CR_WOULD_BREAK;
+                if(!out.is_console() && cmd.interactive)
+                    cr = CR_NEEDS_CONSOLE;
                 else if (cmd.guard)
                 {
                     // Execute hotkey commands in a way where they can
@@ -291,22 +293,22 @@ command_result Plugin::invoke( std::string & command, std::vector <std::string> 
                     CoreSuspender suspend(&c);
                     df::viewscreen *top = c.getTopViewscreen();
 
-                    if (!cmd.guard(&c, top))
+                    if (!cmd.guard(top))
                     {
-                        c.con.printerr("Could not invoke %s: unsuitable UI state.\n", command.c_str());
+                        out.printerr("Could not invoke %s: unsuitable UI state.\n", command.c_str());
                         cr = CR_WRONG_USAGE;
                     }
                     else
                     {
-                        cr = cmd.function(&c, parameters);
+                        cr = cmd.function(out, parameters);
                     }
                 }
                 else
                 {
-                    cr = cmd.function(&c, parameters);
+                    cr = cmd.function(out, parameters);
                 }
                 if (cr == CR_WRONG_USAGE && !cmd.usage.empty())
-                    c.con << "Usage:\n" << cmd.usage << flush;
+                    out << "Usage:\n" << cmd.usage << flush;
                 break;
             }
         }
@@ -315,14 +317,14 @@ command_result Plugin::invoke( std::string & command, std::vector <std::string> 
     return cr;
 }
 
-bool Plugin::can_invoke_hotkey( std::string & command, df::viewscreen *top )
+bool Plugin::can_invoke_hotkey(const std::string & command, df::viewscreen *top )
 {
     Core & c = Core::getInstance();
     bool cr = false;
     access->lock_add();
     if(state == PS_LOADED)
     {
-        for (int i = 0; i < commands.size();i++)
+        for (size_t i = 0; i < commands.size();i++)
         {
             PluginCommand &cmd = commands[i];
             if(cmd.name == command)
@@ -330,9 +332,9 @@ bool Plugin::can_invoke_hotkey( std::string & command, df::viewscreen *top )
                 if (cmd.interactive)
                     cr = false;
                 else if (cmd.guard)
-                    cr = cmd.guard(&c, top);
+                    cr = cmd.guard(top);
                 else
-                    cr = default_hotkey(&c, top);
+                    cr = Gui::default_hotkey(top);
                 break;
             }
         }
@@ -341,30 +343,66 @@ bool Plugin::can_invoke_hotkey( std::string & command, df::viewscreen *top )
     return cr;
 }
 
-command_result Plugin::on_update()
+command_result Plugin::on_update(color_ostream &out)
 {
-    Core & c = Core::getInstance();
     command_result cr = CR_NOT_IMPLEMENTED;
     access->lock_add();
     if(state == PS_LOADED && plugin_onupdate)
     {
-        cr = plugin_onupdate(&c);
+        cr = plugin_onupdate(out);
+        Lua::Core::Reset(out, "plugin_onupdate");
     }
     access->lock_sub();
     return cr;
 }
 
-command_result Plugin::on_state_change(state_change_event event)
+command_result Plugin::on_state_change(color_ostream &out, state_change_event event)
 {
-    Core & c = Core::getInstance();
     command_result cr = CR_NOT_IMPLEMENTED;
     access->lock_add();
     if(state == PS_LOADED && plugin_onstatechange)
     {
-        cr = plugin_onstatechange(&c, event);
+        cr = plugin_onstatechange(out, event);
+        Lua::Core::Reset(out, "plugin_onstatechange");
     }
     access->lock_sub();
     return cr;
+}
+
+RPCService *Plugin::rpc_connect(color_ostream &out)
+{
+    RPCService *rv = NULL;
+
+    access->lock_add();
+
+    if(state == PS_LOADED && plugin_rpcconnect)
+    {
+        rv = plugin_rpcconnect(out);
+    }
+
+    if (rv)
+    {
+        // Retain the access reference
+        assert(!rv->holder);
+        services.push_back(rv);
+        rv->holder = this;
+        return rv;
+    }
+    else
+    {
+        access->lock_sub();
+        return NULL;
+    }
+}
+
+void Plugin::detach_connection(RPCService *svc)
+{
+    int idx = linear_index(services, svc);
+
+    assert(svc->holder == this && idx >= 0);
+
+    vector_erase_at(services, idx);
+    access->lock_sub();
 }
 
 Plugin::plugin_state Plugin::getState() const
@@ -372,33 +410,153 @@ Plugin::plugin_state Plugin::getState() const
     return state;
 }
 
+void Plugin::index_lua(DFLibrary *lib)
+{
+    if (auto cmdlist = (CommandReg*)LookupPlugin(lib, "plugin_lua_commands"))
+    {
+        for (; cmdlist->name; ++cmdlist)
+        {
+            auto &cmd = lua_commands[cmdlist->name];
+            if (!cmd) cmd = new LuaCommand(this,cmdlist->name);
+            cmd->command = cmdlist->command;
+        }
+    }
+    if (auto funlist = (FunctionReg*)LookupPlugin(lib, "plugin_lua_functions"))
+    {
+        for (; funlist->name; ++funlist)
+        {
+            auto &cmd = lua_functions[funlist->name];
+            if (!cmd) cmd = new LuaFunction(this,funlist->name);
+            cmd->identity = funlist->identity;
+        }
+    }
+    if (auto evlist = (EventReg*)LookupPlugin(lib, "plugin_lua_events"))
+    {
+        for (; evlist->name; ++evlist)
+        {
+            auto &cmd = lua_events[evlist->name];
+            if (!cmd) cmd = new LuaEvent(this,evlist->name);
+            cmd->handler.identity = evlist->event->get_handler();
+            cmd->event = evlist->event;
+            if (cmd->active)
+                cmd->event->bind(Lua::Core::State, cmd);
+        }
+    }
+}
+
+void Plugin::reset_lua()
+{
+    for (auto it = lua_commands.begin(); it != lua_commands.end(); ++it)
+        it->second->command = NULL;
+    for (auto it = lua_functions.begin(); it != lua_functions.end(); ++it)
+        it->second->identity = NULL;
+    for (auto it = lua_events.begin(); it != lua_events.end(); ++it)
+    {
+        it->second->handler.identity = NULL;
+        it->second->event = NULL;
+    }
+}
+
+int Plugin::lua_cmd_wrapper(lua_State *state)
+{
+    auto cmd = (LuaCommand*)lua_touserdata(state, lua_upvalueindex(1));
+
+    RefAutoinc lock(cmd->owner->access);
+
+    if (!cmd->command)
+        luaL_error(state, "plugin command %s() has been unloaded",
+                   (cmd->owner->name+"."+cmd->name).c_str());
+
+    return cmd->command(state);
+}
+
+int Plugin::lua_fun_wrapper(lua_State *state)
+{
+    auto cmd = (LuaFunction*)lua_touserdata(state, UPVAL_CONTAINER_ID);
+
+    RefAutoinc lock(cmd->owner->access);
+
+    if (!cmd->identity)
+        luaL_error(state, "plugin function %s() has been unloaded",
+                   (cmd->owner->name+"."+cmd->name).c_str());
+
+    return LuaWrapper::method_wrapper_core(state, cmd->identity);
+}
+
+void Plugin::open_lua(lua_State *state, int table)
+{
+    table = lua_absindex(state, table);
+
+    RefAutolock lock(access);
+
+    for (auto it = lua_commands.begin(); it != lua_commands.end(); ++it)
+    {
+        lua_pushlightuserdata(state, it->second);
+        lua_pushcclosure(state, lua_cmd_wrapper, 1);
+        lua_setfield(state, table, it->first.c_str());
+    }
+
+    for (auto it = lua_functions.begin(); it != lua_functions.end(); ++it)
+    {
+        push_function(state, it->second);
+        lua_setfield(state, table, it->first.c_str());
+    }
+
+    if (Lua::IsCoreContext(state))
+    {
+        for (auto it = lua_events.begin(); it != lua_events.end(); ++it)
+        {
+            Lua::MakeEvent(state, it->second);
+
+            push_function(state, &it->second->handler);
+            lua_rawsetp(state, -2, NULL);
+
+            it->second->active = true;
+            if (it->second->event)
+                it->second->event->bind(state, it->second);
+
+            lua_setfield(state, table, it->first.c_str());
+        }
+    }
+}
+
+void Plugin::push_function(lua_State *state, LuaFunction *fn)
+{
+    lua_rawgetp(state, LUA_REGISTRYINDEX, &LuaWrapper::DFHACK_TYPETABLE_TOKEN);
+    lua_pushlightuserdata(state, NULL);
+    lua_pushfstring(state, "%s.%s()", name.c_str(), fn->name.c_str());
+    lua_pushlightuserdata(state, fn);
+    lua_pushcclosure(state, lua_fun_wrapper, 4);
+}
+
 PluginManager::PluginManager(Core * core)
 {
 #ifdef LINUX_BUILD
-    string path = core->p->getPath() + "/hack/plugins/";
+    string path = core->getHackPath() + "plugins/";
     const string searchstr = ".plug.so";
 #else
-    string path = core->p->getPath() + "\\hack\\plugins\\";
+    string path = core->getHackPath() + "plugins\\";
     const string searchstr = ".plug.dll";
 #endif
     cmdlist_mutex = new mutex();
+    eval_ruby = NULL;
     vector <string> filez;
     getdir(path, filez);
-    for(int i = 0; i < filez.size();i++)
+    for(size_t i = 0; i < filez.size();i++)
     {
         if(hasEnding(filez[i],searchstr))
         {
             Plugin * p = new Plugin(core, path + filez[i], filez[i], this);
             all_plugins.push_back(p);
             // make all plugins load by default (until a proper design emerges).
-            p->load();
+            p->load(core->getConsole());
         }
     }
 }
 
 PluginManager::~PluginManager()
 {
-    for(int i = 0; i < all_plugins.size();i++)
+    for(size_t i = 0; i < all_plugins.size();i++)
     {
         delete all_plugins[i];
     }
@@ -408,7 +566,7 @@ PluginManager::~PluginManager()
 
 Plugin *PluginManager::getPluginByName (const std::string & name)
 {
-    for(int i = 0; i < all_plugins.size(); i++)
+    for(size_t i = 0; i < all_plugins.size(); i++)
     {
         if(name == all_plugins[i]->name)
             return all_plugins[i];
@@ -427,31 +585,31 @@ Plugin *PluginManager::getPluginByCommand(const std::string &command)
 }
 
 // FIXME: handle name collisions...
-command_result PluginManager::InvokeCommand( std::string & command, std::vector <std::string> & parameters, bool interactive)
+command_result PluginManager::InvokeCommand(color_ostream &out, const std::string & command, std::vector <std::string> & parameters)
 {
     Plugin *plugin = getPluginByCommand(command);
-    return plugin ? plugin->invoke(command, parameters, interactive) : CR_NOT_IMPLEMENTED;
+    return plugin ? plugin->invoke(out, command, parameters) : CR_NOT_IMPLEMENTED;
 }
 
-bool PluginManager::CanInvokeHotkey(std::string &command, df::viewscreen *top)
+bool PluginManager::CanInvokeHotkey(const std::string &command, df::viewscreen *top)
 {
     Plugin *plugin = getPluginByCommand(command);
-    return plugin ? plugin->can_invoke_hotkey(command, top) : false;
+    return plugin ? plugin->can_invoke_hotkey(command, top) : true;
 }
 
-void PluginManager::OnUpdate( void )
+void PluginManager::OnUpdate(color_ostream &out)
 {
-    for(int i = 0; i < all_plugins.size(); i++)
+    for(size_t i = 0; i < all_plugins.size(); i++)
     {
-        all_plugins[i]->on_update();
+        all_plugins[i]->on_update(out);
     }
 }
 
-void PluginManager::OnStateChange( state_change_event event )
+void PluginManager::OnStateChange(color_ostream &out, state_change_event event)
 {
-    for(int i = 0; i < all_plugins.size(); i++)
+    for(size_t i = 0; i < all_plugins.size(); i++)
     {
-        all_plugins[i]->on_state_change(event);
+        all_plugins[i]->on_state_change(out, event);
     }
 }
 
@@ -460,10 +618,12 @@ void PluginManager::registerCommands( Plugin * p )
 {
     cmdlist_mutex->lock();
     vector <PluginCommand> & cmds = p->commands;
-    for(int i = 0; i < cmds.size();i++)
+    for(size_t i = 0; i < cmds.size();i++)
     {
         belongs[cmds[i].name] = p;
     }
+    if (p->plugin_eval_ruby)
+        eval_ruby = p->plugin_eval_ruby;
     cmdlist_mutex->unlock();
 }
 
@@ -472,9 +632,11 @@ void PluginManager::unregisterCommands( Plugin * p )
 {
     cmdlist_mutex->lock();
     vector <PluginCommand> & cmds = p->commands;
-    for(int i = 0; i < cmds.size();i++)
+    for(size_t i = 0; i < cmds.size();i++)
     {
         belongs.erase(cmds[i].name);
     }
+    if (p->plugin_eval_ruby)
+        eval_ruby = NULL;
     cmdlist_mutex->unlock();
 }

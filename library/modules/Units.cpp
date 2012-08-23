@@ -40,17 +40,32 @@ using namespace std;
 
 // we connect to those
 #include "modules/Units.h"
+#include "modules/Items.h"
 #include "modules/Materials.h"
 #include "modules/Translation.h"
 #include "ModuleFactory.h"
 #include "Core.h"
+#include "MiscUtils.h"
 
 #include "df/world.h"
 #include "df/ui.h"
+#include "df/job.h"
 #include "df/unit_inventory_item.h"
+#include "df/unit_soul.h"
+#include "df/nemesis_record.h"
+#include "df/historical_entity.h"
+#include "df/historical_figure.h"
+#include "df/historical_figure_info.h"
+#include "df/entity_position.h"
+#include "df/entity_position_assignment.h"
+#include "df/histfig_entity_link_positionst.h"
+#include "df/assumed_identity.h"
+#include "df/burrow.h"
+#include "df/creature_raw.h"
+#include "df/caste_raw.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
+using namespace df::enums;
 using df::global::world;
 using df::global::ui;
 
@@ -69,7 +84,7 @@ df::unit * Units::GetCreature (const int32_t index)
     if (!isValid()) return NULL;
 
     // read pointer from vector at position
-    if(index > world->units.all.size())
+    if(size_t(index) > world->units.all.size())
         return 0;
     return world->units.all[index];
 }
@@ -82,8 +97,8 @@ int32_t Units::GetCreatureInBox (int32_t index, df::unit ** furball,
     if (!isValid())
         return -1;
 
-    uint32_t size = world->units.all.size();
-    while (uint32_t(index) < size)
+    size_t size = world->units.all.size();
+    while (size_t(index) < size)
     {
         // read pointer from vector at position
         df::unit * temp = world->units.all[index];
@@ -137,7 +152,7 @@ void Units::CopyCreature(df::unit * source, t_unit & furball)
 
     // mood stuff
     furball.mood = source->mood;
-    furball.mood_skill = source->job.unk_2f8; // FIXME: really? More like currently used skill anyway.
+    furball.mood_skill = source->job.mood_skill; // FIXME: really? More like currently used skill anyway.
     Translation::readName(furball.artifact_name, &source->status.artifact_name);
 
     // labors
@@ -201,24 +216,18 @@ void Units::CopyCreature(df::unit * source, t_unit & furball)
         }
     }
     */
-	/*
-    furball.current_job.occupationPtr = p->readDWord (addr_cr + offs.current_job_offset);
-    if(furball.current_job.occupationPtr)
+    if(source->job.current_job == NULL)
     {
-        furball.current_job.active = true;
-        furball.current_job.jobType = p->readByte (furball.current_job.occupationPtr + offs.job_type_offset );
-        furball.current_job.jobId = p->readWord (furball.current_job.occupationPtr + offs.job_id_offset);
+        furball.current_job.active = false;
     }
     else
     {
-        furball.current_job.active = false;
-    }
-    */
-	// no jobs for now...
-    {
-        furball.current_job.active = false;
+        furball.current_job.active = true;
+        furball.current_job.jobType = source->job.current_job->job_type;
+        furball.current_job.jobId = source->job.current_job->id;
     }
 }
+
 int32_t Units::FindIndexById(int32_t creature_id)
 {
     return df::unit::binsearch_index(world->units.all, creature_id);
@@ -482,39 +491,8 @@ bool Units::ReadInventoryByPtr(const df::unit * unit, std::vector<df::item *> & 
     if(!isValid()) return false;
     if(!unit) return false;
     items.clear();
-    for (uint32_t i = 0; i < unit->inventory.size(); i++)
+    for (size_t i = 0; i < unit->inventory.size(); i++)
         items.push_back(unit->inventory[i]->item);
-    return true;
-}
-
-bool Units::ReadOwnedItemsByIdx(const uint32_t index, std::vector<int32_t> & item)
-{
-    if(index >= world->units.all.size()) return false;
-    df::unit * temp = world->units.all[index];
-    return ReadOwnedItemsByPtr(temp, item);
-}
-
-bool Units::ReadOwnedItemsByPtr(const df::unit * unit, std::vector<int32_t> & items)
-{
-    if(!isValid()) return false;
-    if(!unit) return false;
-    items = unit->owned_items;
-    return true;
-}
-
-bool Units::RemoveOwnedItemByIdx(const uint32_t index, int32_t id)
-{
-    if(index >= world->units.all.size()) return false;
-    df::unit * temp = world->units.all[index];
-    return RemoveOwnedItemByPtr(temp, id);
-}
-
-bool Units::RemoveOwnedItemByPtr(df::unit * unit, int32_t id)
-{
-    if(!isValid()) return false;
-    if(!unit) return false;
-    vector <int32_t> & vec = unit->owned_items;
-    vec.erase(std::remove(vec.begin(), vec.end(), id), vec.end());
     return true;
 }
 
@@ -523,3 +501,450 @@ void Units::CopyNameTo(df::unit * creature, df::language_name * target)
     Translation::copyName(&creature->name, target);
 }
 
+df::coord Units::getPosition(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    if (unit->flags1.bits.caged)
+    {
+        auto cage = getContainer(unit);
+        if (cage)
+            return Items::getPosition(cage);
+    }
+
+    return unit->pos;
+}
+
+df::item *Units::getContainer(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    for (size_t i = 0; i < unit->refs.size(); i++)
+    {
+        df::general_ref *ref = unit->refs[i];
+        if (ref->getType() == general_ref_type::CONTAINED_IN_ITEM)
+            return ref->getItem();
+    }
+
+    return NULL;
+}
+
+static df::assumed_identity *getFigureIdentity(df::historical_figure *figure)
+{
+    if (figure && figure->info && figure->info->reputation)
+        return df::assumed_identity::find(figure->info->reputation->cur_identity);
+
+    return NULL;
+}
+
+df::assumed_identity *Units::getIdentity(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    df::historical_figure *figure = df::historical_figure::find(unit->hist_figure_id);
+
+    return getFigureIdentity(figure);
+}
+
+void Units::setNickname(df::unit *unit, std::string nick)
+{
+    CHECK_NULL_POINTER(unit);
+
+    // There are >=3 copies of the name, and the one
+    // in the unit is not the authoritative one.
+    // This is the reason why military units often
+    // lose nicknames set from Dwarf Therapist.
+    Translation::setNickname(&unit->name, nick);
+
+    if (unit->status.current_soul)
+        Translation::setNickname(&unit->status.current_soul->name, nick);
+
+    df::historical_figure *figure = df::historical_figure::find(unit->hist_figure_id);
+    if (figure)
+    {
+        Translation::setNickname(&figure->name, nick);
+
+        if (auto identity = getFigureIdentity(figure))
+        {
+            auto id_hfig = df::historical_figure::find(identity->histfig_id);
+
+            if (id_hfig)
+            {
+                // Even DF doesn't do this bit, because it's apparently
+                // only used for demons masquerading as gods, so you
+                // can't ever change their nickname in-game.
+                Translation::setNickname(&id_hfig->name, nick);
+            }
+            else
+                Translation::setNickname(&identity->name, nick);
+        }
+    }
+}
+
+df::language_name *Units::getVisibleName(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    if (auto identity = getIdentity(unit))
+    {
+        auto id_hfig = df::historical_figure::find(identity->histfig_id);
+
+        if (id_hfig)
+            return &id_hfig->name;
+
+        return &identity->name;
+    }
+
+    return &unit->name;
+}
+
+df::nemesis_record *Units::getNemesis(df::unit *unit)
+{
+    if (!unit)
+        return NULL;
+
+    for (unsigned i = 0; i < unit->refs.size(); i++)
+    {
+        df::nemesis_record *rv = unit->refs[i]->getNemesis();
+        if (rv && rv->unit == unit)
+            return rv;
+    }
+
+    return NULL;
+}
+
+static bool casteFlagSet(int race, int caste, df::caste_raw_flags flag)
+{
+    auto creature = df::creature_raw::find(race);
+    if (!creature)
+        return false;
+
+    auto craw = vector_get(creature->caste, caste);
+    if (!craw)
+        return false;
+
+    return craw->flags.is_set(flag);
+}
+
+static bool isCrazed(df::unit *unit)
+{
+    if (unit->flags3.bits.scuttle)
+        return false;
+    if (unit->curse.rem_tags1.bits.CRAZED)
+        return false;
+    if (unit->curse.add_tags1.bits.CRAZED)
+        return true;
+    return casteFlagSet(unit->race, unit->caste, caste_raw_flags::CRAZED);
+}
+
+static bool isOpposedToLife(df::unit *unit)
+{
+    if (unit->curse.rem_tags1.bits.OPPOSED_TO_LIFE)
+        return false;
+    if (unit->curse.add_tags1.bits.OPPOSED_TO_LIFE)
+        return true;
+    return casteFlagSet(unit->race, unit->caste, caste_raw_flags::CANNOT_UNDEAD);
+}
+
+bool DFHack::Units::isDead(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    return unit->flags1.bits.dead ||
+           unit->flags3.bits.ghostly;
+}
+
+bool DFHack::Units::isAlive(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    return !unit->flags1.bits.dead &&
+           !unit->flags3.bits.ghostly &&
+           !unit->curse.add_tags1.bits.NOT_LIVING;
+}
+
+bool DFHack::Units::isSane(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    if (unit->flags1.bits.dead ||
+        unit->flags3.bits.ghostly ||
+        isOpposedToLife(unit) ||
+        unit->unknown8.unk2)
+        return false;
+
+    if (unit->unknown8.normal_race == unit->unknown8.were_race && isCrazed(unit))
+        return false;
+
+    switch (unit->mood)
+    {
+    case mood_type::Melancholy:
+    case mood_type::Raving:
+    case mood_type::Berserk:
+        return false;
+    default:
+        break;
+    }
+
+    return true;
+}
+
+bool DFHack::Units::isCitizen(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    // Copied from the conditions used to decide game over,
+    // except that the game appears to let melancholy/raving
+    // dwarves count as citizens.
+
+    if (!isDwarf(unit) || !isSane(unit))
+        return false;
+
+    if (unit->flags1.bits.marauder ||
+        unit->flags1.bits.invader_origin ||
+        unit->flags1.bits.active_invader ||
+        unit->flags1.bits.forest ||
+        unit->flags1.bits.merchant ||
+        unit->flags1.bits.diplomat)
+        return false;
+
+    if (unit->flags1.bits.tame)
+        return true;
+
+    return unit->civ_id == ui->civ_id &&
+           unit->civ_id != -1 &&
+           !unit->flags2.bits.underworld &&
+           !unit->flags2.bits.resident &&
+           !unit->flags2.bits.visitor_uninvited &&
+           !unit->flags2.bits.visitor;
+}
+
+bool DFHack::Units::isDwarf(df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    return unit->race == ui->race_id ||
+           unit->unknown8.normal_race == ui->race_id;
+}
+
+double DFHack::Units::getAge(df::unit *unit, bool true_age)
+{
+    using df::global::cur_year;
+    using df::global::cur_year_tick;
+
+    CHECK_NULL_POINTER(unit);
+
+    if (!cur_year || !cur_year_tick)
+        return -1;
+
+    double year_ticks = 403200.0;
+    double birth_time = unit->relations.birth_year + unit->relations.birth_time/year_ticks;
+    double cur_time = *cur_year + *cur_year_tick / year_ticks;
+
+    if (!true_age && unit->relations.curse_year >= 0)
+    {
+        if (auto identity = getIdentity(unit))
+        {
+            if (identity->histfig_id < 0)
+                birth_time = identity->birth_year + identity->birth_second/year_ticks;
+        }
+    }
+
+    return cur_time - birth_time;
+}
+
+static bool noble_pos_compare(const Units::NoblePosition &a, const Units::NoblePosition &b)
+{
+    if (a.position->precedence < b.position->precedence)
+        return true;
+    if (a.position->precedence > b.position->precedence)
+        return false;
+    return a.position->id < b.position->id;
+}
+
+bool DFHack::Units::getNoblePositions(std::vector<NoblePosition> *pvec, df::unit *unit)
+{
+    CHECK_NULL_POINTER(unit);
+
+    pvec->clear();
+
+    auto histfig = df::historical_figure::find(unit->hist_figure_id);
+    if (!histfig)
+        return false;
+
+    for (size_t i = 0; i < histfig->entity_links.size(); i++)
+    {
+        auto link = histfig->entity_links[i];
+        auto epos = strict_virtual_cast<df::histfig_entity_link_positionst>(link);
+        if (!epos)
+            continue;
+
+        NoblePosition pos;
+
+        pos.entity = df::historical_entity::find(epos->entity_id);
+        if (!pos.entity)
+            continue;
+
+        pos.assignment = binsearch_in_vector(pos.entity->positions.assignments, epos->assignment_id);
+        if (!pos.assignment)
+            continue;
+
+        pos.position = binsearch_in_vector(pos.entity->positions.own, pos.assignment->position_id);
+        if (!pos.position)
+            continue;
+
+        pvec->push_back(pos);
+    }
+
+    if (pvec->empty())
+        return false;
+
+    std::sort(pvec->begin(), pvec->end(), noble_pos_compare);
+    return true;
+}
+
+std::string DFHack::Units::getProfessionName(df::unit *unit, bool ignore_noble, bool plural)
+{
+    std::string prof = unit->custom_profession;
+    if (!prof.empty())
+        return prof;
+
+    std::vector<NoblePosition> np;
+
+    if (!ignore_noble && getNoblePositions(&np, unit))
+    {
+        switch (unit->sex)
+        {
+        case 0:
+            prof = np[0].position->name_female[plural ? 1 : 0];
+            break;
+        case 1:
+            prof = np[0].position->name_male[plural ? 1 : 0];
+            break;
+        default:
+            break;
+        }
+
+        if (prof.empty())
+            prof = np[0].position->name[plural ? 1 : 0];
+        if (!prof.empty())
+            return prof;
+    }
+
+    return getCasteProfessionName(unit->race, unit->caste, unit->profession, plural);
+}
+
+std::string DFHack::Units::getCasteProfessionName(int race, int casteid, df::profession pid, bool plural)
+{
+    std::string prof, race_prefix;
+
+    if (pid < 0 || !is_valid_enum_item(pid))
+        return "";
+
+    bool use_race_prefix = (race >= 0 && race != df::global::ui->race_id);
+
+    if (auto creature = df::creature_raw::find(race))
+    {
+        if (auto caste = vector_get(creature->caste, casteid))
+        {
+            race_prefix = caste->caste_name[0];
+
+            if (plural)
+                prof = caste->caste_profession_name.plural[pid];
+            else
+                prof = caste->caste_profession_name.singular[pid];
+
+            if (prof.empty())
+            {
+                switch (pid)
+                {
+                case profession::CHILD:
+                    prof = caste->child_name[plural ? 1 : 0];
+                    if (!prof.empty())
+                        use_race_prefix = false;
+                    break;
+
+                case profession::BABY:
+                    prof = caste->baby_name[plural ? 1 : 0];
+                    if (!prof.empty())
+                        use_race_prefix = false;
+                    break;
+
+                default:
+                    break;
+                }
+            }
+        }
+
+        if (race_prefix.empty())
+            race_prefix = creature->name[0];
+
+        if (prof.empty())
+        {
+            if (plural)
+                prof = creature->profession_name.plural[pid];
+            else
+                prof = creature->profession_name.singular[pid];
+
+            if (prof.empty())
+            {
+                switch (pid)
+                {
+                case profession::CHILD:
+                    prof = creature->general_child_name[plural ? 1 : 0];
+                    if (!prof.empty())
+                        use_race_prefix = false;
+                    break;
+
+                case profession::BABY:
+                    prof = creature->general_baby_name[plural ? 1 : 0];
+                    if (!prof.empty())
+                        use_race_prefix = false;
+                    break;
+
+                default:
+                    break;
+                }
+            }
+        }
+    }
+
+    if (race_prefix.empty())
+        race_prefix = "Animal";
+
+    if (prof.empty())
+    {
+        switch (pid)
+        {
+        case profession::TRAINED_WAR:
+            prof = "War " + (use_race_prefix ? race_prefix : "Peasant");
+            use_race_prefix = false;
+            break;
+
+        case profession::TRAINED_HUNTER:
+            prof = "Hunting " + (use_race_prefix ? race_prefix : "Peasant");
+            use_race_prefix = false;
+            break;
+
+        case profession::STANDARD:
+            if (!use_race_prefix)
+                prof = "Peasant";
+            break;
+
+        default:
+            if (auto caption = ENUM_ATTR(profession, caption, pid))
+                prof = caption;
+            else
+                prof = ENUM_KEY_STR(profession, pid);
+        }
+    }
+
+    if (use_race_prefix)
+    {
+        if (!prof.empty())
+            race_prefix += " ";
+        prof = race_prefix + prof;
+    }
+
+    return Translation::capitalize(prof, true);
+}

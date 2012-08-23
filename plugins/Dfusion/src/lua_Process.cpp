@@ -2,12 +2,7 @@
 
 static DFHack::Process* GetProcessPtr(lua::state &st)
 {
-	int t=st.gettop();
-	st.getglobal("Process");
-	st.getfield("__pointer");
-	DFHack::Process* c=static_cast<DFHack::Process*>(lua_touserdata(st,-1));
-	st.settop(t);
-	return c;
+	return DFHack::Core::getInstance().p;
 }
 
 static int lua_Process_readDWord(lua_State *S)
@@ -175,9 +170,9 @@ static int lua_Process_getMemRanges(lua_State *S)
 	{
 		st.push(i);
 		st.newtable();
-		st.push(ranges[i].start); // WARNING!! lua has only 32bit numbers, possible loss of data!!
+		st.push((uint32_t)ranges[i].start); // WARNING!! lua has only 32bit numbers, possible loss of data!!
 		st.setfield("start");
-		st.push(ranges[i].end);
+        st.push((uint32_t)ranges[i].end);
 		st.setfield("end");
 		st.push(std::string(ranges[i].name));
 		st.setfield("name");
@@ -275,7 +270,7 @@ const luaL_Reg lua_process_func[]=
 	{NULL,NULL}
 };
 #undef PROC_FUNC
-void lua::RegisterProcess(lua::state &st,DFHack::Process *p)
+void lua::RegisterProcess(lua::state &st)
 {
 	st.getglobal("Process");
 	if(st.is<lua::nil>())
@@ -284,9 +279,6 @@ void lua::RegisterProcess(lua::state &st,DFHack::Process *p)
 		st.newtable();
 	}
 
-	st.pushlightuserdata(p);
-	st.setfield("__pointer");
-	
 	lua::RegFunctionsLocal(st, lua_process_func);
 
 	st.setglobal("Process");

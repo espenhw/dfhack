@@ -12,30 +12,22 @@
 using std::vector;
 using std::string;
 using namespace DFHack;
-using namespace DFHack::Simple;
 using namespace df::enums;
 
 using df::global::world;
 
-DFhackCExport command_result df_deramp (Core * c, vector <string> & parameters)
-{
-    for(int i = 0; i < parameters.size();i++)
-    {
-        if(parameters[i] == "help" || parameters[i] == "?")
-        {
-            c->con.print("This command does two things:\n"
-                "If there are any ramps designated for removal, they will be instantly removed.\n"
-                "Any ramps that don't have their counterpart will be removed (fixes bugs with caveins)\n"
-                );
-            return CR_OK;
-        }
-    }
+DFHACK_PLUGIN("deramp");
 
-    CoreSuspender suspend(c);
+command_result df_deramp (color_ostream &out, vector <string> & parameters)
+{
+    if (!parameters.empty())
+        return CR_WRONG_USAGE;
+
+    CoreSuspender suspend;
 
     if (!Maps::IsValid())
     {
-        c->con.printerr("Map is not available!\n");
+        out.printerr("Map is not available!\n");
         return CR_FAILURE;
     }
 
@@ -46,19 +38,19 @@ DFhackCExport command_result df_deramp (Core * c, vector <string> & parameters)
     for (int i = 0; i < blocks_total; i++)
     {
         df::map_block *block = world->map.map_blocks[i];
-        df::map_block *above = Maps::getBlockAbs(block->map_pos.x, block->map_pos.y, block->map_pos.z + 1);
+        df::map_block *above = Maps::getTileBlock(block->map_pos + df::coord(0,0,1));
 
         for (int x = 0; x < 16; x++)
         {
             for (int y = 0; y < 16; y++)
             {
-                int16_t oldT = block->tiletype[x][y];
-                if ((tileShape(oldT) == RAMP) &&
+                df::tiletype oldT = block->tiletype[x][y];
+                if ((tileShape(oldT) == tiletype_shape::RAMP) &&
                     (block->designation[x][y].bits.dig == tile_dig_designation::Default))
                 {
                     // Current tile is a ramp.
                     // Set current tile, as accurately as can be expected
-                    int16_t newT = findSimilarTileType(oldT, FLOOR);
+                    df::tiletype newT = findSimilarTileType(oldT, tiletype_shape::FLOOR);
 
                     // If no change, skip it (couldn't find a good tile type)
                     if (oldT == newT)
@@ -68,42 +60,40 @@ DFhackCExport command_result df_deramp (Core * c, vector <string> & parameters)
                     block->designation[x][y].bits.dig = tile_dig_designation::No;
 
                     // Check the tile above this one, in case a downward slope needs to be removed.
-                    if ((above) && (tileShape(above->tiletype[x][y]) == RAMP_TOP))
-                        above->tiletype[x][y] = 32; // open space
+                    if ((above) && (tileShape(above->tiletype[x][y]) == tiletype_shape::RAMP_TOP))
+                        above->tiletype[x][y] = tiletype::OpenSpace; // open space
                     count++;
                 }
                 // ramp fixer
-                else if ((tileShape(oldT) != RAMP)
-                    && (above) && (tileShape(above->tiletype[x][y]) == RAMP_TOP))
+                else if ((tileShape(oldT) != tiletype_shape::RAMP)
+                    && (above) && (tileShape(above->tiletype[x][y]) == tiletype_shape::RAMP_TOP))
                 {
-                    above->tiletype[x][y] = 32; // open space
+                    above->tiletype[x][y] = tiletype::OpenSpace; // open space
                     countbad++;
                 }
             }
         }
     }
     if (count)
-        c->con.print("Found and changed %d tiles.\n", count);
+        out.print("Found and changed %d tiles.\n", count);
     if (countbad)
-        c->con.print("Fixed %d bad down ramps.\n", countbad);
+        out.print("Fixed %d bad down ramps.\n", countbad);
     return CR_OK;
 }
 
-DFhackCExport const char * plugin_name ( void )
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "deramp";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
-    commands.push_back(PluginCommand("deramp",
-        "De-ramp.  All ramps marked for removal are replaced with floors.",
-        df_deramp));
+    commands.push_back(PluginCommand(
+        "deramp", "De-ramp. All ramps marked for removal are replaced with floors.",
+        df_deramp, false,
+        "  If there are any ramps designated for removal, they will be instantly\n"
+        "  removed. Any ramps that don't have their counterpart will also be removed\n"
+        "  (fixes bugs with caveins)\n"
+    ));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }

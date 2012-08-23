@@ -1,19 +1,20 @@
 inline bool getassignment( const df::coord2d &xy )
 {
-    return getassignment(xy.x,xy.y);
+    return tile_bitmask.getassignment(xy);
 }
 inline bool getassignment( int x, int y )
 {
-    return (tile_bitmask[y] & (1 << x));
+    return tile_bitmask.getassignment(x,y);
 }
 inline void setassignment( const df::coord2d &xy, bool bit )
 {
-    return setassignment(xy.x,xy.y, bit);
+    return tile_bitmask.setassignment(xy, bit);
 }
 inline void setassignment( int x, int y, bool bit )
 {
-    if(bit)
-        tile_bitmask[y] |= (1 << x);
-    else
-        tile_bitmask[y] &= 0xFFFF ^ (1 << x);
+    return tile_bitmask.setassignment(x, y, bit);
+}
+bool has_assignments()
+{
+    return tile_bitmask.has_assignments();
 }

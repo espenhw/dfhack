@@ -24,20 +24,13 @@ struct t_vecTriplet
     void * alloc_end;
 };
 
-DFhackCExport command_result df_vectors  (Core * c,
-                                          vector <string> & parameters);
-DFhackCExport command_result df_clearvec (Core * c,
-                                          vector <string> & parameters);
+command_result df_vectors  (color_ostream &out, vector <string> & parameters);
+command_result df_clearvec (color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
+DFHACK_PLUGIN("vectors");
+
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "vectors";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
-
     commands.push_back(PluginCommand("vectors",
                "Scan memory for vectors.\
 \n                1st param: start of scan\
@@ -50,7 +43,7 @@ DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand>
      return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
@@ -99,11 +92,11 @@ static bool inAnyRange(vector<t_memrange> &ranges, void * ptr)
     return false;
 }
 
-static bool getHeapRanges(Core * c, std::vector<t_memrange> &heap_ranges)
+static bool getHeapRanges(color_ostream &out, std::vector<t_memrange> &heap_ranges)
 {
     std::vector<t_memrange> ranges;
 
-    c->p->getMemRanges(ranges);
+    Core::getInstance().p->getMemRanges(ranges);
 
     for (size_t i = 0; i < ranges.size(); i++)
     {
@@ -121,7 +114,7 @@ static bool getHeapRanges(Core * c, std::vector<t_memrange> &heap_ranges)
 
     if (heap_ranges.empty())
     {
-        c->con << "No possible heap segments." << std::endl;
+        out << "No possible heap segments." << std::endl;
         return false;
     }
 
@@ -132,13 +125,13 @@ static bool getHeapRanges(Core * c, std::vector<t_memrange> &heap_ranges)
 // COMMAND: vectors
 ////////////////////////////////////////
 
-static void vectorsUsage(Console &con)
+static void vectorsUsage(color_ostream &con)
 {
     con << "Usage: vectors <start of scan address> <# bytes to scan>"
         << std::endl;
 }
 
-static void printVec(Console &con, const char* msg, t_vecTriplet *vec,
+static void printVec(color_ostream &con, const char* msg, t_vecTriplet *vec,
                      uint32_t start, uint32_t pos)
 {
     uint32_t length = (int)vec->end - (int)vec->start;
@@ -148,10 +141,8 @@ static void printVec(Console &con, const char* msg, t_vecTriplet *vec,
               msg, offset, pos, vec->start, length);
 }
 
-DFhackCExport command_result df_vectors (Core * c, vector <string> & parameters)
+command_result df_vectors (color_ostream &con, vector <string> & parameters)
 {
-    Console & con = c->con;
-
     if (parameters.size() != 2)
     {
         vectorsUsage(con);
@@ -178,14 +169,13 @@ DFhackCExport command_result df_vectors (Core * c, vector <string> & parameters)
     while (start % 4 != 0)
         start++;
 
-    c->Suspend();
+    CoreSuspender suspend;
 
     std::vector<t_memrange> heap_ranges;
 
-    if (!getHeapRanges(c, heap_ranges))
+    if (!getHeapRanges(con, heap_ranges))
     {
         return CR_FAILURE;
-        c->Resume();
     }
 
     bool startInRange = false;
@@ -213,7 +203,6 @@ DFhackCExport command_result df_vectors (Core * c, vector <string> & parameters)
     if (!startInRange)
     {
         con << "Address not in any memory range." << std::endl;
-        c->Resume();
         return CR_FAILURE;
     }
 
@@ -255,7 +244,6 @@ DFhackCExport command_result df_vectors (Core * c, vector <string> & parameters)
         }
     } // for (uint32_t pos = start; pos < end; pos += ptr_size)
 
-    c->Resume();
     return CR_OK;
 }
 
@@ -263,17 +251,15 @@ DFhackCExport command_result df_vectors (Core * c, vector <string> & parameters)
 // COMMAND: clearvec
 ////////////////////////////////////////
 
-static void clearUsage(Console &con)
+static void clearUsage(color_ostream &con)
 {
     con << "Usage: clearvec <vector1 addr> [vector2 addr] ..." << std::endl;
     con << "Address can be either for vector or pointer to vector."
         << std::endl;
 }
 
-DFhackCExport command_result df_clearvec (Core * c, vector <string> & parameters)
+command_result df_clearvec (color_ostream &con, vector <string> & parameters)
 {
-    Console & con = c->con;
-
     if (parameters.size() == 0)
     {
         clearUsage(con);
@@ -294,13 +280,12 @@ DFhackCExport command_result df_clearvec (Core * c, vector <string> & parameters
         return CR_FAILURE;
     }
 
-    c->Suspend();
+    CoreSuspender suspend;
 
     std::vector<t_memrange> heap_ranges;
 
-    if (!getHeapRanges(c, heap_ranges))
+    if (!getHeapRanges(con, heap_ranges))
     {
-        c->Resume();
         return CR_FAILURE;
     }
 
@@ -361,6 +346,5 @@ DFhackCExport command_result df_clearvec (Core * c, vector <string> & parameters
         con << addr_str << " set to zero length." << std::endl;
     } // for (size_t i = 0; i < parameters.size(); i++)
 
-    c->Resume();
     return CR_OK;
 }

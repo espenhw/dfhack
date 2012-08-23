@@ -3,6 +3,15 @@ STD_STRING=0
 DWORD=1
 WORD=2
 BYTE=3
+QWORD=4
+DOUBLE=5
+FLOAT=6
+
+getline=function (inp)
+return dfhack.lineedit(inp or "")
+end
+io.stdin=nil
+
 function printd(...)
 	if DEBUG then
 		print(...)
@@ -16,9 +25,9 @@ function GetTextRegion()
 	ranges__=Process.getMemRanges()
 	--print("Ranges:"..#ranges__)
 	for k,v in pairs(ranges__) do
-		--for k2,v2 in pairs(v) do
-		--	print(string.format("%d %s->%s",k,tostring(k2),tostring(v2)))
-		--end
+		for k2,v2 in pairs(v) do
+			--print(string.format("%d %s->%s",k,tostring(k2),tostring(v2)))
+		end
 		--local num
 		--flgs=""
 		--if(v["read"])then flgs=flgs..'r' end
@@ -27,7 +36,7 @@ function GetTextRegion()
 		--if num>=100 then
 		--print(string.format("%d %x->%x %s %s",k,v["start"],v["end"],v.name or "",flgs))
 		--end
-		local pos=string.find(v.name,".text") or string.find(v.name,"libs/Dwarf_Fortress")
+		local pos=string.find(v.name,"Dwarf Fortress.exe") or string.find(v.name,"libs/Dwarf_Fortress")
 		if(pos~=nil) and v["execute"] then
 			__TEXT=v;
 			return v;
@@ -90,10 +99,12 @@ function SetExecute(pos)
 	UpdateRanges()
 	local reg=GetRegionIn(pos)
 	reg.execute=true
+	reg["write"]=true
 	Process.setPermisions(reg,reg) -- TODO maybe make a page with only execute permisions or sth
 end
 -- engine bindings
 engine=engine or {}
+--[=[ use default peek/pokes for now
 engine.peekd=Process.readDWord
 engine.poked=Process.writeDWord
 engine.peekb=Process.readByte
@@ -106,7 +117,7 @@ engine.peekstr=Process.readCString
 --engine.pokestr=Process.readCString
 engine.peekarb=Process.read
 engine.pokearb=Process.write
-
+--]=]
 
 function engine.peek(offset,rtype)
 	if type(rtype)=="table" then
@@ -117,13 +128,19 @@ function engine.peek(offset,rtype)
 		end
 	end
 	if rtype==STD_STRING then
-		return engine.peekstr(offset)
+		return engine.peekstr2(offset)
 	elseif rtype==DWORD then
 		return engine.peekd(offset)
 	elseif rtype==WORD then
 		return engine.peekw(offset)
 	elseif rtype==BYTE then
 		return engine.peekb(offset)
+	elseif rtype==QWORD then
+		return engine.peekq(offset)
+	elseif rtype==FLOAT then
+		return engine.peekfloat(offset)
+	elseif rtype==DOUBLE then
+		return engine.peekdouble(offset)
 	else
 		error("Invalid peek type")
 		return 
@@ -138,13 +155,19 @@ function engine.poke(offset,rtype,val)
 		end
 	end
 	if rtype==STD_STRING then
-		return engine.pokestr(offset,val)
+		return engine.pokestr2(offset,val)
 	elseif rtype==DWORD then
 		return engine.poked(offset,val)
 	elseif rtype==WORD then
 		return engine.pokew(offset,val)
 	elseif rtype==BYTE then
 		return engine.pokeb(offset,val)
+	elseif rtype==QWORD then
+		return engine.pokeq(offset,val)
+	elseif rtype==FLOAT then
+		return engine.pokefloat(offset,val)
+	elseif rtype==DOUBLE then
+		return engine.pokedouble(offset,val)
 	else
 		error("Invalid poke type:"..tostring(rtype))
 		return 
@@ -202,6 +225,11 @@ function engine.LoadModData(file)
 	end
 	return T2
 end
+function engine.FindMarkerCall(moddata,name)
+	if moddata.symbols[name] ~=nil then
+		return moddata.symbols[name]+1
+	end
+end
 function engine.FindMarker(moddata,name)
 	if moddata.symbols[name] ~=nil then
 		return engine.findmarker(0xDEADBEEF,moddata.data,moddata.size,moddata.symbols[name])
@@ -227,15 +255,16 @@ function it_menu:display()
 	local ans
 	repeat
 		local r
-		r=io.stdin:read()
+		r=getline("")
+		if r==nil then return end
 		if r=='q' then return end
 		ans=tonumber(r)
 		
-		if ans==nil or not(ans<=table.maxn(self.items) and ans>0) then
+		if ans==nil or not(ans<=#self.items and ans>0) then
 			print("incorrect choice")
 		end
 		
-	until ans~=nil and (ans<=table.maxn(self.items) and ans>0)
+	until ans~=nil and (ans<=#self.items and ans>0)
 	self.items[ans][1]()
 end
 function MakeMenu()
@@ -343,33 +372,19 @@ function findVectors()
 end
 
 function GetRaceToken(p) --actually gets token...
-	print(string.format("%x vs %x",offsets.getEx('CreatureGloss'),VersionInfo.getGroup("Materials"):getAddress("creature_type_vector")))
-	--local vec=engine.peek(offsets.getEx('CreatureGloss'),ptr_vector)
-	local vec=engine.peek(VersionInfo.getGroup("Materials"):getAddress("creature_type_vector"),ptr_vector)
-	--print("Vector ok")
-	local off=vec:getval(p)
-	--print("Offset:"..off)
-	local crgloss=engine.peek(off,ptr_CrGloss)
-	--print("Peek ok")
-	return crgloss.token:getval()
+	local vec=df.global.world.raws.creatures.all
+	return vec[p].creature_id
 end
 function BuildNameTable()
 	local rtbl={}
-	local vec=engine.peek(offsets.getEx('CreatureGloss'),ptr_vector)
+	local vec=df.global.world.raws.creatures.all
 	--print(string.format("Vector start:%x",vec.st))
 	--print(string.format("Vector end:%x",vec.en))
-	--local i=0
-	for p=0,vec:size()-1 do
-		local off=vec:getval(p)
-		--print("First member:"..off)
-		local name=engine.peek(off,ptt_dfstring)
-		--print("Loading:"..p.."="..name:getval())
-		rtbl[name:getval()]=p
-		--i=i+1
-		--if i>100 then
-		--	io.stdin:read()
-		--	i=0
-		--end
+	--print("Creature count:"..vec.size)
+	for k=0,#vec-1 do
+		local name=vec[k].creature_id
+		--print(k.." "..tostring(name))
+		rtbl[name]=k		
 	end
 	return rtbl;
 end
@@ -458,31 +473,62 @@ function ParseNames(path)
 	end
 	return ret
 end
-
+function getSelectedUnit()
+	if df.global.ui.main.mode~=23 then
+		return nil
+	end
+	local unit_indx=df.global.ui_selected_unit
+	if unit_indx<#df.global.world.units.active-1 then
+		return df.global.world.units.active[unit_indx]
+	else
+		return nil
+	end
+end
 function getxyz() -- this will return pointers x,y and z coordinates.
-	local off=VersionInfo.getGroup("Position"):getAddress("cursor_xyz") -- lets find where in memory its being held
-	-- now lets read them (they are double words (or unsigned longs or 4 bits each) and go in sucesion
-	local x=engine.peekd(off)
-	local y=engine.peekd(off+4) --next is 4 from start
-	local z=engine.peekd(off+8) --next is 8 from start
-	--print("Pointer @:"..x..","..y..","..z)
+	local x=df.global.cursor.x
+	local y=df.global.cursor.y
+	local z=df.global.cursor.z	
 	return x,y,z -- return the coords
 end
-function GetCreatureAtPos(x,y,z) -- gets the creature index @ x,y,z coord
+function getCreatureAtPos(x,y,z) -- gets the creature index @ x,y,z coord
 	--local x,y,z=getxyz() --get 'X' coords
-	local vector=engine.peek(VersionInfo.getGroup("Creatures"):getAddress("vector"),ptr_vector) -- load all creatures
-	for i = 0, vector:size()-1 do -- look into all creatures offsets
-		local curoff=vector:getval(i) -- get i-th creatures offset
-		local cx=engine.peek(curoff,ptr_Creature.x) --get its coordinates
-		local cy=engine.peek(curoff,ptr_Creature.y) 
-		local cz=engine.peek(curoff,ptr_Creature.z)
+	local vector=df.global.world.units.all -- load all creatures
+	for i = 0, #vector-1 do -- look into all creatures offsets
+		local curpos=vector[i].pos --get its coordinates
+		local cx=curpos.x 
+		local cy=curpos.y
+		local cz=curpos.z
 		if cx==x and cy==y and cz==z then --compare them
-			return i --return index
+			return vector[i] --return index
 		end
 	end
-	print("Creature not found!")
-	return -1
+	--print("Creature not found!")
+	return nil
 	
+end
+function getCreatureAtPointer()
+	return getCreatureAtPos(getxyz())
+end
+function getCreature()
+	local unit=getSelectedUnit()
+	if unit==nil then
+		unit=getCreatureAtPointer()
+	end
+	--any other selection methods...
+	return unit
+end
+function getNemesisId(unit)
+	for k,v in pairs(unit.refs) do
+		if df.general_ref_is_nemesisst:is_instance(v) then
+			return v.nemesis_id
+		end
+	end
+end
+function getNemesis(unit)
+	local id=getNemesisId(unit)
+	if id then
+		return df.nemesis_record.find(id)
+	end
 end
 function Allocate(size)
 	local ptr=engine.getmod('General_Space')

@@ -4,6 +4,8 @@
 #include "PluginManager.h"
 
 #include "modules/Gui.h"
+#include "modules/Translation.h"
+#include "modules/Units.h"
 
 #include "DataDefs.h"
 #include "df/ui.h"
@@ -11,8 +13,16 @@
 #include "df/squad.h"
 #include "df/unit.h"
 #include "df/unit_soul.h"
+#include "df/historical_entity.h"
 #include "df/historical_figure.h"
+#include "df/historical_figure_info.h"
+#include "df/assumed_identity.h"
 #include "df/language_name.h"
+
+#include "RemoteServer.h"
+#include "rename.pb.h"
+
+#include "MiscUtils.h"
 
 #include <stdlib.h>
 
@@ -21,20 +31,17 @@ using std::string;
 using std::endl;
 using namespace DFHack;
 using namespace df::enums;
+using namespace dfproto;
 
 using df::global::ui;
 using df::global::world;
 
-static command_result rename(Core * c, vector <string> & parameters);
+static command_result rename(color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "rename";
-}
+DFHACK_PLUGIN("rename");
 
-DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init (color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     if (world && ui) {
         commands.push_back(PluginCommand(
             "rename", "Rename various things.", rename, false,
@@ -49,27 +56,62 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
-static void set_nickname(df::language_name *name, std::string nick)
+static df::squad *getSquadByIndex(unsigned idx)
 {
-    if (!name->has_name)
-    {
-        *name = df::language_name();
+    auto entity = df::historical_entity::find(ui->group_id);
+    if (!entity)
+        return NULL;
 
-        name->language = 0;
-        name->has_name = true;
-    }
+    if (idx >= entity->squads.size())
+        return NULL;
 
-    name->nickname = nick;
+    return df::squad::find(entity->squads[idx]);
 }
 
-static command_result rename(Core * c, vector <string> &parameters)
+static command_result RenameSquad(color_ostream &stream, const RenameSquadIn *in)
 {
-    CoreSuspender suspend(c);
+    df::squad *squad = df::squad::find(in->squad_id());
+    if (!squad)
+        return CR_NOT_FOUND;
+
+    if (in->has_nickname())
+        Translation::setNickname(&squad->name, UTF2DF(in->nickname()));
+    if (in->has_alias())
+        squad->alias = UTF2DF(in->alias());
+
+    return CR_OK;
+}
+
+static command_result RenameUnit(color_ostream &stream, const RenameUnitIn *in)
+{
+    df::unit *unit = df::unit::find(in->unit_id());
+    if (!unit)
+        return CR_NOT_FOUND;
+
+    if (in->has_nickname())
+        Units::setNickname(unit, UTF2DF(in->nickname()));
+    if (in->has_profession())
+        unit->custom_profession = UTF2DF(in->profession());
+
+    return CR_OK;
+}
+
+DFhackCExport RPCService *plugin_rpcconnect(color_ostream &)
+{
+    RPCService *svc = new RPCService();
+    svc->addFunction("RenameSquad", RenameSquad);
+    svc->addFunction("RenameUnit", RenameUnit);
+    return svc;
+}
+
+static command_result rename(color_ostream &out, vector <string> &parameters)
+{
+    CoreSuspender suspend;
 
     string cmd;
     if (!parameters.empty())
@@ -80,15 +122,15 @@ static command_result rename(Core * c, vector <string> &parameters)
         if (parameters.size() != 3)
             return CR_WRONG_USAGE;
 
-        std::vector<df::squad*> &squads = world->squads.all;
-
         int id = atoi(parameters[1].c_str());
-        if (id < 1 || id > squads.size()) {
-            c->con.printerr("Invalid squad index\n");
+        df::squad *squad = getSquadByIndex(id-1);
+
+        if (!squad) {
+            out.printerr("Couldn't find squad with index %d.\n", id);
             return CR_WRONG_USAGE;
         }
 
-        squads[id-1]->alias = parameters[2];
+        squad->alias = parameters[2];
     }
     else if (cmd == "hotkey")
     {
@@ -97,7 +139,7 @@ static command_result rename(Core * c, vector <string> &parameters)
 
         int id = atoi(parameters[1].c_str());
         if (id < 1 || id > 16) {
-            c->con.printerr("Invalid hotkey index\n");
+            out.printerr("Invalid hotkey index\n");
             return CR_WRONG_USAGE;
         }
 
@@ -108,29 +150,18 @@ static command_result rename(Core * c, vector <string> &parameters)
         if (parameters.size() != 2)
             return CR_WRONG_USAGE;
 
-        df::unit *unit = getSelectedUnit(c);
+        df::unit *unit = Gui::getSelectedUnit(out, true);
         if (!unit)
             return CR_WRONG_USAGE;
 
-        // There are 3 copies of the name, and the one
-        // in the unit is not the authoritative one.
-        // This is the reason why military units often
-        // lose nicknames set from Dwarf Therapist.
-        set_nickname(&unit->name, parameters[1]);
-
-        if (unit->status.current_soul)
-            set_nickname(&unit->status.current_soul->name, parameters[1]);
-
-        df::historical_figure *figure = df::historical_figure::find(unit->hist_figure_id);
-        if (figure)
-            set_nickname(&figure->name, parameters[1]);
+        Units::setNickname(unit, parameters[1]);
     }
     else if (cmd == "unit-profession")
     {
         if (parameters.size() != 2)
             return CR_WRONG_USAGE;
 
-        df::unit *unit = getSelectedUnit(c);
+        df::unit *unit = Gui::getSelectedUnit(out, true);
         if (!unit)
             return CR_WRONG_USAGE;
 
@@ -139,7 +170,7 @@ static command_result rename(Core * c, vector <string> &parameters)
     else
     {
         if (!parameters.empty() && cmd != "?")
-            c->con.printerr("Invalid command: %s\n", cmd.c_str());
+            out.printerr("Invalid command: %s\n", cmd.c_str());
         return CR_WRONG_USAGE;
     }
 

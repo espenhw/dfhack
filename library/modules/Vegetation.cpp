@@ -40,7 +40,6 @@ using namespace DFHack;
 #include "df/world.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
 using df::global::world;
 
 bool Vegetation::isValid()
@@ -55,14 +54,14 @@ uint32_t Vegetation::getCount()
 
 df::plant * Vegetation::getPlant(const int32_t index)
 {
-    if (index < 0 || index >= getCount())
+    if (uint32_t(index) >= getCount())
         return NULL;
     return world->plants.all[index];
 }
 
 bool Vegetation::copyPlant(const int32_t index, t_plant &out)
 {
-    if (index < 0 || index >= getCount())
+    if (uint32_t(index) >= getCount())
         return false;
 
     out.origin = world->plants.all[index];

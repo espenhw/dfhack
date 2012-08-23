@@ -1,4 +1,4 @@
-﻿/*
+/*
 https://github.com/peterix/dfhack
 Copyright (c) 2009-2011 Petr Mrázek (peterix@gmail.com)
 
@@ -39,13 +39,17 @@ using namespace std;
 #include "modules/Materials.h"
 #include "modules/Items.h"
 #include "modules/Units.h"
+#include "modules/MapCache.h"
 #include "ModuleFactory.h"
 #include "Core.h"
-#include "Virtual.h"
+#include "Error.h"
 #include "MiscUtils.h"
 
+#include "df/ui.h"
 #include "df/world.h"
 #include "df/item.h"
+#include "df/building.h"
+#include "df/building_actual.h"
 #include "df/tool_uses.h"
 #include "df/itemdef_weaponst.h"
 #include "df/itemdef_trapcompst.h"
@@ -64,11 +68,26 @@ using namespace std;
 #include "df/trapcomp_flags.h"
 #include "df/job_item.h"
 #include "df/general_ref.h"
+#include "df/general_ref_unit_itemownerst.h"
+#include "df/general_ref_contains_itemst.h"
+#include "df/general_ref_contained_in_itemst.h"
+#include "df/general_ref_building_holderst.h"
+#include "df/viewscreen_itemst.h"
+#include "df/vermin.h"
+
+#include "df/unit_inventory_item.h"
+#include "df/body_part_raw.h"
+#include "df/unit.h"
+#include "df/creature_raw.h"
+#include "df/caste_raw.h"
+#include "df/body_part_template_flags.h"
+#include "df/general_ref_unit_holderst.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
 using namespace df::enums;
 using df::global::world;
+using df::global::ui;
+using df::global::ui_selected_unit;
 
 #define ITEMDEF_VECTORS \
     ITEM(WEAPON, weapons, itemdef_weaponst) \
@@ -168,16 +187,8 @@ bool ItemTypeInfo::find(const std::string &token)
     if (items[0] == "NONE")
         return true;
 
-    FOR_ENUM_ITEMS(item_type, i)
-    {
-        const char *key = ENUM_ATTR(item_type, key, i);
-        if (key && key == items[0])
-        {
-            type = i;
-            break;
-        }
-    }
-
+    if (!find_enum_item(&type, items[0]))
+        return false;
     if (type == NONE)
         return false;
     if (items.size() == 1)
@@ -188,7 +199,7 @@ bool ItemTypeInfo::find(const std::string &token)
     switch (type) {
 #define ITEM(type,vec,tclass) \
     case type: \
-        for (int i = 0; i < defs.vec.size(); i++) { \
+        for (size_t i = 0; i < defs.vec.size(); i++) { \
             if (defs.vec[i]->id == items[1]) { \
                 subtype = i; custom = defs.vec[i]; return true; \
             } \
@@ -383,7 +394,7 @@ bool ItemTypeInfo::matches(const df::job_item &item, MaterialInfo *mat)
     if ((item_ok1.whole & ~item_mask1.whole) ||
         (item_ok2.whole & ~item_mask2.whole) ||
         (item_ok3.whole & ~item_mask3.whole))
-        Core::getInstance().con.printerr("ItemTypeInfo.matches inconsistent\n");
+        Core::printerr("ItemTypeInfo.matches inconsistent\n");
 
 #undef OK
 #undef RQ
@@ -425,96 +436,433 @@ bool Items::copyItem(df::item * itembase, DFHack::dfh_item &item)
     return true;
 }
 
-int32_t Items::getItemOwnerID(const df::item * item)
+df::general_ref *Items::getGeneralRef(df::item *item, df::general_ref_type type)
 {
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
-    {
-        df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() == df::general_ref_type::UNIT_ITEMOWNER)
-            return ref->getID();
-    }
-    return -1;
+    CHECK_NULL_POINTER(item);
+
+    return findRef(item->itemrefs, type);
 }
 
-df::unit *Items::getItemOwner(const df::item * item)
+df::specific_ref *Items::getSpecificRef(df::item *item, df::specific_ref_type type)
 {
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
-    {
-        df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() == df::general_ref_type::UNIT_ITEMOWNER)
-            return ref->getUnit();
-    }
-    return NULL;
+    CHECK_NULL_POINTER(item);
+
+    return findRef(item->specific_refs, type);
 }
 
-int32_t Items::getItemContainerID(const df::item * item)
+df::unit *Items::getOwner(df::item * item)
 {
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
-    {
-        df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() == df::general_ref_type::CONTAINED_IN_ITEM)
-            return ref->getID();
-    }
-    return -1;
+    auto ref = getGeneralRef(item, general_ref_type::UNIT_ITEMOWNER);
+
+    return ref ? ref->getUnit() : NULL;
 }
 
-df::item *Items::getItemContainer(const df::item * item)
+bool Items::setOwner(df::item *item, df::unit *unit)
 {
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
+    CHECK_NULL_POINTER(item);
+
+    for (int i = item->itemrefs.size()-1; i >= 0; i--)
     {
         df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() == df::general_ref_type::CONTAINED_IN_ITEM)
-            return ref->getItem();
-    }
-    return NULL;
-}
 
-bool Items::getContainedItems(const df::item * item, std::vector<int32_t> &items)
-{
-    return readItemRefs(item, df::general_ref_type::CONTAINS_ITEM, items);
-}
-
-bool Items::readItemRefs(const df::item * item, df::general_ref_type type, std::vector<int32_t> &values)
-{
-    values.clear();
-
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
-    {
-        df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() == type)
-            values.push_back(ref->getID());
-    }
-
-    return !values.empty();
-}
-
-bool Items::removeItemOwner(df::item * item)
-{
-    for (uint32_t i = 0; i < item->itemrefs.size(); i++)
-    {
-        df::general_ref *ref = item->itemrefs[i];
-        if (ref->getType() != df::general_ref_type::UNIT_ITEMOWNER)
+        if (!strict_virtual_cast<df::general_ref_unit_itemownerst>(ref))
             continue;
 
-        df::unit *unit = ref->getUnit();
-
-        if (unit == NULL || !Units::RemoveOwnedItemByPtr(unit, item->id))
+        if (auto cur = ref->getUnit())
         {
-            cerr << "RemoveOwnedItemIdx: CREATURE " << ref->getID() << " ID " << item->id << " FAILED!" << endl;
-            return false;
+            if (cur == unit)
+                return true;
+
+            erase_from_vector(cur->owned_items, item->id);
         }
+
         delete ref;
-        item->itemrefs.erase(item->itemrefs.begin() + i--);
+        vector_erase_at(item->itemrefs, i);
     }
 
-    item->flags.bits.owned = 0;
+    item->flags.bits.owned = false;
+
+    if (unit)
+    {
+        auto ref = df::allocate<df::general_ref_unit_itemownerst>();
+        if (!ref)
+            return false;
+
+        item->flags.bits.owned = true;
+        ref->unit_id = unit->id;
+
+        insert_into_vector(unit->owned_items, item->id);
+        item->itemrefs.push_back(ref);
+    }
 
     return true;
 }
 
-std::string Items::getItemClass(const df::item * item)
+df::item *Items::getContainer(df::item * item)
 {
-    const t_virtual * virt = (t_virtual *) item;
-    return virt->getClassName();
+    auto ref = getGeneralRef(item, general_ref_type::CONTAINED_IN_ITEM);
+
+    return ref ? ref->getItem() : NULL;
 }
 
+void Items::getContainedItems(df::item *item, std::vector<df::item*> *items)
+{
+    CHECK_NULL_POINTER(item);
+
+    items->clear();
+
+    for (size_t i = 0; i < item->itemrefs.size(); i++)
+    {
+        df::general_ref *ref = item->itemrefs[i];
+        if (ref->getType() != general_ref_type::CONTAINS_ITEM)
+            continue;
+
+        auto child = ref->getItem();
+        if (child)
+            items->push_back(child);
+    }
+}
+
+df::coord Items::getPosition(df::item *item)
+{
+    CHECK_NULL_POINTER(item);
+
+    /* Function reverse-engineered from DF code. */
+
+    if (item->flags.bits.removed)
+        return df::coord();
+
+    if (item->flags.bits.in_inventory)
+    {
+        for (size_t i = 0; i < item->itemrefs.size(); i++)
+        {
+            df::general_ref *ref = item->itemrefs[i];
+
+            switch (ref->getType())
+            {
+            case general_ref_type::CONTAINED_IN_ITEM:
+                if (auto item2 = ref->getItem())
+                    return getPosition(item2);
+                break;
+
+            case general_ref_type::UNIT_HOLDER:
+                if (auto unit = ref->getUnit())
+                    return Units::getPosition(unit);
+                break;
+
+            /*case general_ref_type::BUILDING_HOLDER:
+                if (auto bld = ref->getBuilding())
+                    return df::coord(bld->centerx, bld->centery, bld->z);
+                break;*/
+
+            default:
+                break;
+            }
+        }
+
+        for (size_t i = 0; i < item->specific_refs.size(); i++)
+        {
+            df::specific_ref *ref = item->specific_refs[i];
+
+            switch (ref->type)
+            {
+            case specific_ref_type::VERMIN_ESCAPED_PET:
+                return ref->vermin->pos;
+
+            default:
+                break;
+            }
+        }
+
+        return df::coord();
+    }
+
+    return item->pos;
+}
+
+static char quality_table[] = { 0, '-', '+', '*', '=', '@' };
+
+static void addQuality(std::string &tmp, int quality)
+{
+    if (quality > 0 && quality <= 5) {
+        char c = quality_table[quality];
+        tmp = c + tmp + c;
+    }
+}
+
+std::string Items::getDescription(df::item *item, int type, bool decorate)
+{
+    CHECK_NULL_POINTER(item);
+
+    std::string tmp;
+    item->getItemDescription(&tmp, type);
+
+    if (decorate) {
+        if (item->flags.bits.foreign)
+            tmp = "(" + tmp + ")";
+
+        addQuality(tmp, item->getQuality());
+
+        if (item->isImproved()) {
+            tmp = "<" + tmp + ">";
+            addQuality(tmp, item->getImprovementQuality());
+        }
+    }
+
+    return tmp;
+}
+
+static void resetUnitInvFlags(df::unit *unit, df::unit_inventory_item *inv_item)
+{
+    if (inv_item->mode == df::unit_inventory_item::Worn ||
+        inv_item->mode == df::unit_inventory_item::WrappedAround)
+    {
+        unit->flags2.bits.calculated_inventory = false;
+        unit->flags2.bits.calculated_insulation = false;
+    }
+    else if (inv_item->mode == df::unit_inventory_item::StuckIn)
+    {
+        unit->flags3.bits.unk2 = false;
+    }
+}
+
+static bool detachItem(MapExtras::MapCache &mc, df::item *item)
+{
+    if (!item->specific_refs.empty())
+        return false;
+    if (item->world_data_id != -1)
+        return false;
+
+    for (size_t i = 0; i < item->itemrefs.size(); i++)
+    {
+        df::general_ref *ref = item->itemrefs[i];
+
+        switch (ref->getType())
+        {
+        case general_ref_type::PROJECTILE:
+        case general_ref_type::BUILDING_HOLDER:
+        case general_ref_type::BUILDING_CAGED:
+        case general_ref_type::BUILDING_TRIGGER:
+        case general_ref_type::BUILDING_TRIGGERTARGET:
+        case general_ref_type::BUILDING_CIVZONE_ASSIGNED:
+            return false;
+
+        default:
+            continue;
+        }
+    }
+
+    if (item->flags.bits.on_ground)
+    {
+        if (!mc.removeItemOnGround(item))
+            Core::printerr("Item was marked on_ground, but not in block: %d (%d,%d,%d)\n",
+                           item->id, item->pos.x, item->pos.y, item->pos.z);
+
+        item->flags.bits.on_ground = false;
+        return true;
+    }
+    else if (item->flags.bits.in_inventory)
+    {
+        bool found = false;
+
+        for (int i = item->itemrefs.size()-1; i >= 0; i--)
+        {
+            df::general_ref *ref = item->itemrefs[i];
+
+            switch (ref->getType())
+            {
+            case general_ref_type::CONTAINED_IN_ITEM:
+                if (auto item2 = ref->getItem())
+                {
+                    // Viewscreens hold general_ref_contains_itemst pointers
+                    for (auto screen = Core::getTopViewscreen(); screen; screen = screen->parent)
+                    {
+                        auto vsitem = strict_virtual_cast<df::viewscreen_itemst>(screen);
+                        if (vsitem && vsitem->item == item2)
+                            return false;
+                    }
+
+                    item2->flags.bits.weight_computed = false;
+
+                    removeRef(item2->itemrefs, general_ref_type::CONTAINS_ITEM, item->id);
+                }
+                break;
+
+            case general_ref_type::UNIT_HOLDER:
+                if (auto unit = ref->getUnit())
+                {
+                    // Unit view sidebar holds inventory item pointers
+                    if (ui->main.mode == ui_sidebar_mode::ViewUnits &&
+                        (!ui_selected_unit ||
+                         vector_get(world->units.active, *ui_selected_unit) == unit))
+                        return false;
+
+                    for (int i = unit->inventory.size()-1; i >= 0; i--)
+                    {
+                        df::unit_inventory_item *inv_item = unit->inventory[i];
+                        if (inv_item->item != item)
+                            continue;
+
+                        resetUnitInvFlags(unit, inv_item);
+
+                        vector_erase_at(unit->inventory, i);
+                        delete inv_item;
+                    }
+                }
+                break;
+
+            default:
+                continue;
+            }
+
+            found = true;
+            vector_erase_at(item->itemrefs, i);
+            delete ref;
+        }
+
+        if (!found)
+            return false;
+
+        item->flags.bits.in_inventory = false;
+        return true;
+    }
+    else
+        return false;
+}
+
+static void putOnGround(MapExtras::MapCache &mc, df::item *item, df::coord pos)
+{
+    item->pos = pos;
+    item->flags.bits.on_ground = true;
+
+    if (!mc.addItemOnGround(item))
+        Core::printerr("Could not add item %d to ground at (%d,%d,%d)\n",
+                       item->id, pos.x, pos.y, pos.z);
+}
+
+bool DFHack::Items::moveToGround(MapExtras::MapCache &mc, df::item *item, df::coord pos)
+{
+    CHECK_NULL_POINTER(item);
+
+    if (!detachItem(mc, item))
+        return false;
+
+    putOnGround(mc, item, pos);
+    return true;
+}
+
+bool DFHack::Items::moveToContainer(MapExtras::MapCache &mc, df::item *item, df::item *container)
+{
+    CHECK_NULL_POINTER(item);
+    CHECK_NULL_POINTER(container);
+
+    auto cpos = getPosition(container);
+    if (!cpos.isValid())
+        return false;
+
+    auto ref1 = df::allocate<df::general_ref_contains_itemst>();
+    auto ref2 = df::allocate<df::general_ref_contained_in_itemst>();
+
+    if (!ref1 || !ref2)
+    {
+        delete ref1; delete ref2;
+        Core::printerr("Could not allocate container refs.\n");
+        return false;
+    }
+
+    if (!detachItem(mc, item))
+    {
+        delete ref1; delete ref2;
+        return false;
+    }
+
+    item->pos = container->pos;
+    item->flags.bits.in_inventory = true;
+
+    container->flags.bits.container = true;
+    container->flags.bits.weight_computed = false;
+
+    ref1->item_id = item->id;
+    container->itemrefs.push_back(ref1);
+
+    ref2->item_id = container->id;
+    item->itemrefs.push_back(ref2);
+
+    return true;
+}
+
+bool DFHack::Items::moveToBuilding(MapExtras::MapCache &mc, df::item *item, df::building_actual *building,int16_t use_mode)
+{
+    CHECK_NULL_POINTER(item);
+    CHECK_NULL_POINTER(building);
+    CHECK_INVALID_ARGUMENT(use_mode == 0 || use_mode == 2);
+
+    auto ref = df::allocate<df::general_ref_building_holderst>();
+    if(!ref)
+    {
+        delete ref;
+        Core::printerr("Could not allocate building holder refs.\n");
+        return false;
+    }
+
+    if (!detachItem(mc, item))
+    {
+        delete ref;
+        return false;
+    }
+
+    item->pos.x=building->centerx;
+    item->pos.y=building->centery;
+    item->pos.z=building->z;
+    item->flags.bits.in_building=true;
+
+    ref->building_id=building->id;
+    item->itemrefs.push_back(ref);
+
+    auto con=new df::building_actual::T_contained_items;
+    con->item=item;
+    con->use_mode=use_mode;
+    building->contained_items.push_back(con);
+
+    return true;
+}
+
+bool DFHack::Items::moveToInventory(
+    MapExtras::MapCache &mc, df::item *item, df::unit *unit,
+    df::unit_inventory_item::T_mode mode, int body_part
+) {
+    CHECK_NULL_POINTER(item);
+    CHECK_NULL_POINTER(unit);
+    CHECK_NULL_POINTER(unit->body.body_plan);
+    CHECK_INVALID_ARGUMENT(is_valid_enum_item(mode));
+    int body_plan_size = unit->body.body_plan->body_parts.size();
+    CHECK_INVALID_ARGUMENT(body_part < 0 || body_part <= body_plan_size);
+
+    auto holderReference = df::allocate<df::general_ref_unit_holderst>();
+    if (!holderReference)
+    {
+        Core::printerr("Could not allocate UNIT_HOLDER reference.\n");
+        return false;
+    }
+
+    if (!detachItem(mc, item))
+    {
+        delete holderReference;
+        return false;
+    }
+
+    item->flags.bits.in_inventory = true;
+
+    auto newInventoryItem = new df::unit_inventory_item();
+    newInventoryItem->item = item;
+    newInventoryItem->mode = mode;
+    newInventoryItem->body_part_id = body_part;
+    unit->inventory.push_back(newInventoryItem);
+
+    holderReference->unit_id = unit->id;
+    item->itemrefs.push_back(holderReference);
+
+    resetUnitInvFlags(unit, newInventoryItem);
+
+    return true;
+}

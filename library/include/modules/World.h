@@ -35,42 +35,15 @@ distribution.
 #include "Module.h"
 #include <ostream>
 
+#include "DataDefs.h"
+
 namespace DFHack
 {
-    /**
-     * \ingroup grp_world
-     */
-    enum WeatherType
-    {
-        CLEAR,
-        RAINING,
-        SNOWING
-    };
-    typedef unsigned char weather_map [5][5];
-    /**
-     * \ingroup grp_world
-     */
-    enum GameMode
-    {
-        GAMEMODE_DWARF,
-        GAMEMODE_ADVENTURE,
-        GAMEMODENUM,
-        GAMEMODE_NONE
-    };
-    /**
-     * \ingroup grp_world
-     */
-    enum GameType
-    {
-        GAMETYPE_DWARF_MAIN,
-        GAMETYPE_ADVENTURE_MAIN,
-        GAMETYPE_VIEW_LEGENDS,
-        GAMETYPE_DWARF_RECLAIM,
-        GAMETYPE_DWARF_ARENA,
-        GAMETYPE_ADVENTURE_ARENA,
-        GAMETYPENUM,
-        GAMETYPE_NONE
-    };
+    typedef df::game_mode GameMode;
+    typedef df::game_type GameType;
+
+#define GAMEMODE_ADVENTURE df::enums::game_mode::ADVENTURE
+
     /**
      * \ingroup grp_world
      */
@@ -93,6 +66,7 @@ namespace DFHack
         static const int NumInts = 7;
 
         bool isValid() { return id != 0; }
+        int entry_id() { return -id; }
 
         const std::string &key() { return key_value; }
 
@@ -112,7 +86,6 @@ namespace DFHack
     class DFHACK_EXPORT World : public Module
     {
         public:
-        weather_map * wmap;
         World();
         ~World();
         bool Start();
@@ -137,12 +110,26 @@ namespace DFHack
         // This ensures that the values are stored in save games.
         PersistentDataItem AddPersistentData(const std::string &key);
         PersistentDataItem GetPersistentData(const std::string &key);
-        void GetPersistentData(std::vector<PersistentDataItem> *vec, const std::string &key);
-        void DeletePersistentData(const PersistentDataItem &item);
+        PersistentDataItem GetPersistentData(int entry_id);
+        // Calls GetPersistentData(key); if not found, adds and sets added to true.
+        // The result can still be not isValid() e.g. if the world is not loaded.
+        PersistentDataItem GetPersistentData(const std::string &key, bool *added);
+        // Lists all items with the given key.
+        // If prefix is true, search for keys starting with key+"/".
+        // GetPersistentData(&vec,"",true) returns all items.
+        // Items have alphabetic order by key; same key ordering is undefined.
+        void GetPersistentData(std::vector<PersistentDataItem> *vec,
+                               const std::string &key, bool prefix = false);
+        // Deletes the item; returns true if success.
+        bool DeletePersistentData(const PersistentDataItem &item);
 
-        private:
+        void ClearPersistentCache();
+
+    private:
         struct Private;
         Private *d;
+
+        bool BuildPersistentCache();
     };
 }
 #endif

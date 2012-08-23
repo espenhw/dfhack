@@ -14,60 +14,54 @@
 #include "TileTypes.h"
 
 using namespace DFHack;
-using namespace DFHack::Simple;
 using namespace df::enums;
 using df::global::world;
 
-DFhackCExport command_result tubefill(DFHack::Core * c, std::vector<std::string> & params);
+command_result tubefill(color_ostream &out, std::vector<std::string> & params);
 
-DFhackCExport const char * plugin_name ( void )
-{
-    return "tubefill";
-}
+DFHACK_PLUGIN("tubefill");
 
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    commands.clear();
     commands.push_back(PluginCommand("tubefill","Fill in all the adamantine tubes again.",tubefill));
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
-DFhackCExport command_result tubefill(DFHack::Core * c, std::vector<std::string> & params)
+command_result tubefill(color_ostream &out, std::vector<std::string> & params)
 {
     uint64_t count = 0;
 
-    for(int i = 0; i < params.size();i++)
+    for(size_t i = 0; i < params.size();i++)
     {
         if(params[i] == "help" || params[i] == "?")
         {
-            c->con.print("Replenishes mined out adamantine and hollow adamantine tubes.\n"
+            out.print("Replenishes mined out adamantine and hollow adamantine tubes.\n"
                 "May cause !!FUN!!\n"
                 );
             return CR_OK;
         }
     }
-    CoreSuspender suspend(c);
+
+    CoreSuspender suspend;
+
     if (!Maps::IsValid())
     {
-        c->con.printerr("Map is not available!\n");
+        out.printerr("Map is not available!\n");
         return CR_FAILURE;
     }
 
     // walk the map
-    for (uint32_t i = 0; i < world->map.map_blocks.size(); i++)
+    for (size_t i = 0; i < world->map.map_blocks.size(); i++)
     {
         df::map_block *block = world->map.map_blocks[i];
-        df::map_block *above = Maps::getBlockAbs(block->map_pos.x, block->map_pos.y, block->map_pos.z + 1);
-        if (block->local_feature == -1)
-            continue;
+        df::map_block *above = Maps::getTileBlock(block->map_pos + df::coord(0,0,1));
         DFHack::t_feature feature;
-        DFCoord coord(block->map_pos.x >> 4, block->map_pos.y >> 4, block->map_pos.z);
-        if (!Maps::GetLocalFeature(feature, coord, block->local_feature))
+        if (!Maps::ReadFeatures(block, &feature, NULL))
             continue;
         if (feature.type != feature_type::deep_special_tube)
             continue;
@@ -79,7 +73,7 @@ DFhackCExport command_result tubefill(DFHack::Core * c, std::vector<std::string>
                     continue;
 
                 // Is the tile already a wall?
-                if (tileShape(block->tiletype[x][y]) == WALL)
+                if (tileShape(block->tiletype[x][y]) == tiletype_shape::WALL)
                     continue;
 
                 // Does the tile contain liquid?
@@ -92,20 +86,20 @@ DFhackCExport command_result tubefill(DFHack::Core * c, std::vector<std::string>
                 // Check the tile above this one, in case we need to add a floor
                 if (above)
                 {
-                    if ((tileShape(above->tiletype[x][y]) == EMPTY) || (tileShape(above->tiletype[x][y]) == RAMP_TOP))
+                    if ((tileShape(above->tiletype[x][y]) == tiletype_shape::EMPTY) || (tileShape(above->tiletype[x][y]) == tiletype_shape::RAMP_TOP))
                     {
                         // if this tile isn't a local feature, it's likely the tile underneath was originally just a floor
                         // it's also possible there was just solid non-feature stone above, but we don't care enough to check
                         if (!above->designation[x][y].bits.feature_local)
                             continue;
-                        above->tiletype[x][y] = findTileType(FLOOR, FEATSTONE, tilevariant_invalid, TILE_NORMAL, TileDirection());
+                        above->tiletype[x][y] = findRandomVariant(tiletype::FeatureFloor1);
                     }
                 }
-                block->tiletype[x][y] = findTileType(WALL, FEATSTONE, tilevariant_invalid, TILE_NORMAL, TileDirection());
+                block->tiletype[x][y] = tiletype::FeatureWall;
                 ++count;
             }
         }
     }
-    c->con.print("Found and changed %d tiles.\n", count);
+    out.print("Found and changed %d tiles.\n", count);
     return CR_OK;
 }

@@ -1,4 +1,24 @@
+// Plugin tiletypes
 //
+// This plugin allows fine editing of individual game tiles (expect for
+// changing material subtypes).
+//
+// Commands:
+// tiletypes            - runs the interractive interpreter
+// tiletypes-command    - run the given command
+//                        (intended to be mapped to a hotkey or used from dfhack-run)
+// tiletypes-here       - runs the execute method with the last settings from
+//                        tiletypes(-command), including brush!
+//                        (intended to be mapped to a hotkey)
+// tiletypes-here-point - runs the execute method with the last settings from
+//                        tiletypes(-command), except with a point brush!
+//                        (intended to be mapped to a hotkey)
+// Options (everything but tiletypes-command):
+// ?, help        - print some help
+//
+// Options (tiletypes-command):
+// (anything) - run the given command
+
 #include <iostream>
 #include <vector>
 #include <map>
@@ -20,75 +40,188 @@ using std::set;
 #include "TileTypes.h"
 #include "modules/MapCache.h"
 #include "df/tile_dig_designation.h"
+#include "Brushes.h"
 using namespace MapExtras;
 using namespace DFHack;
 using namespace df::enums;
 
-//zilpin: These two functions were giving me compile errors in VS2008, so I cheated with the C style loop below, just to get it to build.
-//Original code is commented out.
-void tolower(std::string &str)
-{
-    //The C++ way...
-    //std::transform(str.begin(), str.end(), str.begin(), std::bind2nd(std::ptr_fun(&std::tolower<char> ), std::locale("")));
+CommandHistory tiletypes_hist;
 
-    //The C way...
-    for(char *c=(char *)str.c_str(); *c; ++c)
-    {
-        *c = tolower(*c);
-    }
+command_result df_tiletypes (color_ostream &out, vector <string> & parameters);
+command_result df_tiletypes_command (color_ostream &out, vector <string> & parameters);
+command_result df_tiletypes_here (color_ostream &out, vector <string> & parameters);
+command_result df_tiletypes_here_point (color_ostream &out, vector <string> & parameters);
+
+DFHACK_PLUGIN("tiletypes");
+
+DFhackCExport command_result plugin_init ( color_ostream &out, std::vector <PluginCommand> &commands)
+{
+    tiletypes_hist.load("tiletypes.history");
+    commands.push_back(PluginCommand("tiletypes", "Paint map tiles freely, similar to liquids.", df_tiletypes, true));
+    commands.push_back(PluginCommand("tiletypes-command", "Run the given commands (seperated by ' ; '; an empty command is the same as run).", df_tiletypes_command));
+    commands.push_back(PluginCommand("tiletypes-here", "Use the last settings from tiletypes, including brush, at cursor location.", df_tiletypes_here));
+    commands.push_back(PluginCommand("tiletypes-here-point", "Use the last settings from tiletypes, not including brush, at cursor location.", df_tiletypes_here_point));
+    return CR_OK;
 }
 
-void toupper(std::string &str)
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
-    //std::transform(str.begin(), str.end(), str.begin(), std::bind2nd(std::ptr_fun(&std::toupper<char>), std::locale("")));
-    for(char *c=(char *)str.c_str(); *c; ++c)
-    {
-        *c = toupper(*c);
-    }
+    tiletypes_hist.save("tiletypes.history");
+    return CR_OK;
 }
 
-int toint(const std::string &str, int failValue = 0)
+void help( color_ostream & out, std::vector<std::string> &commands, int start, int end)
 {
-    std::istringstream ss(str);
-    int valInt;
-    ss >> valInt;
-    if (ss.fail())
+    std::string option = commands.size() > start ? commands[start] : "";
+    if (option.empty())
     {
-        return failValue;
+        out << "Commands:" << std::endl
+            << " quit / q              : quit" << std::endl
+            << " filter / f [options]  : change filter options" << std::endl
+            << " paint / p [options]   : change paint options" << std::endl
+            << " point / p             : set point brush" << std::endl
+            << " range / r [w] [h] [z] : set range brush" << std::endl
+            << " block                 : set block brush" << std::endl
+            << " column                : set column brush" << std::endl
+            << " run / (empty)         : paint!" << std::endl
+            << std::endl
+            << "Filter/paint options:" << std::endl
+            << " Any: reset to default (no filter/paint)" << std::endl
+            << " Shape / sh / s: set tile shape information" << std::endl
+            << " Material / mat / m: set tile material information" << std::endl
+            << " Special / sp: set special tile information" << std::endl
+            << " Variant / var / v: set variant tile information" << std::endl
+            << " All / a: set the four above at the same time (no ANY support)" << std::endl
+            << " Designated / d: set designated flag" << std::endl
+            << " Hidden / h: set hidden flag" << std::endl
+            << " Light / l: set light flag" << std::endl
+            << " Subterranean / st: set subterranean flag" << std::endl
+            << " Skyview / sv: set skyview flag" << std::endl
+            << " Aquifer / aqua: set aquifer flag" << std::endl
+            << "See help [option] for more information" << std::endl;
     }
-    return valInt;
+    else if (option == "shape" || option == "s" ||option == "sh")
+    {
+        out << "Available shapes:" << std::endl
+            << " ANY" << std::endl;
+        FOR_ENUM_ITEMS(tiletype_shape,i)
+        {
+            out << " " << ENUM_KEY_STR(tiletype_shape,i) << std::endl;
+        }
+    }
+    else if (option == "material"|| option == "mat" ||option == "m")
+    {
+        out << "Available materials:" << std::endl
+            << " ANY" << std::endl;
+        FOR_ENUM_ITEMS(tiletype_material,i)
+        {
+            out << " " << ENUM_KEY_STR(tiletype_material,i) << std::endl;
+        }
+    }
+    else if (option == "special" || option == "sp")
+    {
+        out << "Available specials:" << std::endl
+            << " ANY" << std::endl;
+        FOR_ENUM_ITEMS(tiletype_special,i)
+        {
+            out << " " << ENUM_KEY_STR(tiletype_special,i) << std::endl;
+        }
+    }
+    else if (option == "variant" || option == "var" || option == "v")
+    {
+        out << "Available variants:" << std::endl
+            << " ANY" << std::endl;
+        FOR_ENUM_ITEMS(tiletype_variant,i)
+        {
+            out << " " << ENUM_KEY_STR(tiletype_variant,i) << std::endl;
+        }
+    }
+    else if (option == "designated" || option == "d")
+    {
+        out << "Available designated flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
+    else if (option == "hidden" || option == "h")
+    {
+        out << "Available hidden flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
+    else if (option == "light" || option == "l")
+    {
+        out << "Available light flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
+    else if (option == "subterranean" || option == "st")
+    {
+        out << "Available subterranean flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
+    else if (option == "skyview" || option == "sv")
+    {
+        out << "Available skyview flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
+    else if (option == "aquifer" || option == "aqua")
+    {
+        out << "Available aquifer flags:" << std::endl
+            << " ANY, 0, 1" << std::endl;
+    }
 }
 
 struct TileType
 {
-    DFHack::TileShape shape;
-    DFHack::TileMaterial material;
-    DFHack::TileSpecial special;
-    DFHack::TileVariant variant;
+    df::tiletype_shape shape;
+    df::tiletype_material material;
+    df::tiletype_special special;
+    df::tiletype_variant variant;
     int dig;
     int hidden;
     int light;
     int subterranean;
     int skyview;
+    int aquifer;
 
     TileType()
     {
-        shape = DFHack::tileshape_invalid;
-        material = DFHack::tilematerial_invalid;
-        special = DFHack::tilespecial_invalid;
-        variant = DFHack::tilevariant_invalid;
+        clear();
+    }
+
+    void clear()
+    {
+        shape = tiletype_shape::NONE;
+        material = tiletype_material::NONE;
+        special = tiletype_special::NONE;
+        variant = tiletype_variant::NONE;
         dig = -1;
         hidden = -1;
         light = -1;
         subterranean = -1;
         skyview = -1;
+        aquifer = -1;
     }
 
     bool empty()
     {
         return shape == -1 && material == -1 && special == -1 && variant == -1
-            && hidden == -1 && light == -1 && subterranean == -1 && skyview == -1
-            && dig == -1;
+            && dig == -1 && hidden == -1 && light == -1 && subterranean == -1
+            && skyview == -1 && aquifer == -1;
+    }
+
+    inline bool matches(const df::tiletype source,
+                        const df::tile_designation des)
+    {
+        bool rv = true;
+        rv &= (shape == -1 || shape == tileShape(source));
+        rv &= (material == -1 || material == tileMaterial(source));
+        rv &= (special == -1 || special == tileSpecial(source));
+        rv &= (variant == -1 || variant == tileVariant(source));
+        rv &= (dig == -1 || (dig != 0) == (des.bits.dig != tile_dig_designation::No));
+        rv &= (hidden == -1 || (hidden != 0) == des.bits.hidden);
+        rv &= (light == -1 || (light != 0) == des.bits.light);
+        rv &= (subterranean == -1 || (subterranean != 0) == des.bits.subterranean);
+        rv &= (skyview == -1 || (skyview != 0) == des.bits.outside);
+        rv &= (aquifer == -1 || (aquifer != 0) == des.bits.water_table);
+        return rv;
     }
 };
 
@@ -99,7 +232,7 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
 
     if (paint.special >= 0)
     {
-        stream << DFHack::TileSpecialString[paint.special];
+        stream << ENUM_KEY_STR(tiletype_special,paint.special);
         used = true;
         needSpace = true;
     }
@@ -112,7 +245,7 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
             needSpace = false;
         }
 
-        stream << DFHack::TileMaterialString[paint.material];
+        stream << ENUM_KEY_STR(tiletype_material,paint.material);
         used = true;
         needSpace = true;
     }
@@ -125,7 +258,7 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
             needSpace = false;
         }
 
-        stream << DFHack::TileShapeString[paint.shape];
+        stream << ENUM_KEY_STR(tiletype_shape,paint.shape);
         used = true;
         needSpace = true;
     }
@@ -138,7 +271,7 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
             needSpace = false;
         }
 
-        stream << "VAR_" << (paint.variant + 1);
+        stream << ENUM_KEY_STR(tiletype_variant,paint.variant);
         used = true;
         needSpace = true;
     }
@@ -208,6 +341,19 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
         needSpace = true;
     }
 
+    if (paint.aquifer >= 0)
+    {
+        if (needSpace)
+        {
+            stream << " ";
+            needSpace = false;
+        }
+
+        stream << (paint.aquifer ? "AQUIFER" : "NO AQUIFER");
+        used = true;
+        needSpace = true;
+    }
+
     if (!used)
     {
         stream << "any";
@@ -216,12 +362,112 @@ std::ostream &operator<<(std::ostream &stream, const TileType &paint)
     return stream;
 }
 
-bool processTileType(TileType &paint, const std::string &option, const std::string &value)
+static TileType filter, paint;
+static Brush *brush = new RectangleBrush(1,1);
+
+void printState(color_ostream &out)
 {
-    std::string val = value;
-    toupper(val);
+    out << "Filter: " << filter << std::endl
+        << "Paint: "  << paint  << std::endl
+        << "Brush: "  << brush << std::endl;
+}
+
+//zilpin: These two functions were giving me compile errors in VS2008, so I cheated with the C style loop below, just to get it to build.
+//Original code is commented out.
+void tolower(std::string &str)
+{
+    //The C++ way...
+    //std::transform(str.begin(), str.end(), str.begin(), std::bind2nd(std::ptr_fun(&std::tolower<char> ), std::locale("")));
+
+    //The C way...
+    for(char *c=(char *)str.c_str(); *c; ++c)
+    {
+        *c = tolower(*c);
+    }
+}
+
+void toupper(std::string &str)
+{
+    //std::transform(str.begin(), str.end(), str.begin(), std::bind2nd(std::ptr_fun(&std::toupper<char>), std::locale("")));
+    for(char *c=(char *)str.c_str(); *c; ++c)
+    {
+        *c = toupper(*c);
+    }
+}
+
+int toint(const std::string &str, int failValue = 0)
+{
+    std::istringstream ss(str);
     int valInt;
-    if (val == "ANY")
+    ss >> valInt;
+    if (ss.fail())
+    {
+        return failValue;
+    }
+    return valInt;
+}
+
+bool tryShape(std::string value, TileType &paint)
+{
+    FOR_ENUM_ITEMS(tiletype_shape,i)
+    {
+        if (value == ENUM_KEY_STR(tiletype_shape,i))
+        {
+            paint.shape = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool tryMaterial(std::string value, TileType &paint)
+{
+    FOR_ENUM_ITEMS(tiletype_material, i)
+    {
+        if (value == ENUM_KEY_STR(tiletype_material,i))
+        {
+            paint.material = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool trySpecial(std::string value, TileType &paint)
+{
+    FOR_ENUM_ITEMS(tiletype_special, i)
+    {
+        if (value == ENUM_KEY_STR(tiletype_special,i))
+        {
+            paint.special = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool tryVariant(std::string value, TileType &paint)
+{
+    FOR_ENUM_ITEMS(tiletype_variant, i)
+    {
+        if (value == ENUM_KEY_STR(tiletype_variant,i))
+        {
+            paint.variant = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool processTileType(color_ostream & out, TileType &paint, std::vector<std::string> &params, int start, int end)
+{
+    int loc = start;
+    std::string option = params[loc++];
+    std::string value = end <= loc ? "" : params[loc++];
+    tolower(option);
+    toupper(value);
+    int valInt;
+    if (value == "ANY")
     {
         valInt = -1;
     }
@@ -231,91 +477,68 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
     }
     bool found = false;
 
-    if (option == "shape" || option == "sh" || option == "s")
+    if (option == "any")
     {
-        if (valInt >= -1 && valInt < DFHack::tileshape_count)
+        paint.clear();
+    }
+    else if (option == "shape" || option == "sh" || option == "s")
+    {
+        if (is_valid_enum_item((df::tiletype_shape)valInt))
         {
-            paint.shape = (DFHack::TileShape) valInt;
+            paint.shape = (df::tiletype_shape)valInt;
             found = true;
         }
         else
         {
-            for (int i = 0; i < DFHack::tileshape_count; i++)
+            if (!tryShape(value, paint))
             {
-                if (val == DFHack::TileShapeString[i])
-                {
-                    paint.shape = (DFHack::TileShape) i;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                std::cout << "Unknown tile shape: " << value << std::endl;
+                out << "Unknown tile shape: " << value << std::endl;
             }
         }
     }
     else if (option == "material" || option == "mat" || option == "m")
     {
-        if (valInt >= -1 && valInt < DFHack::tilematerial_count)
+        if (is_valid_enum_item((df::tiletype_material)valInt))
         {
-            paint.material = (DFHack::TileMaterial) valInt;
+            paint.material = (df::tiletype_material)valInt;
             found = true;
         }
         else
         {
-            for (int i = 0; i < DFHack::tilematerial_count; i++)
+            if (!tryMaterial(value, paint))
             {
-                if (val == DFHack::TileMaterialString[i])
-                {
-                    paint.material = (DFHack::TileMaterial) i;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                std::cout << "Unknown tile material: " << value << std::endl;
+                out << "Unknown tile material: " << value << std::endl;
             }
         }
     }
     else if (option == "special" || option == "sp")
     {
-        if (valInt >= -1 && valInt < DFHack::tilespecial_count)
+        if (is_valid_enum_item((df::tiletype_special)valInt))
         {
-            paint.special = (DFHack::TileSpecial) valInt;
+            paint.special = (df::tiletype_special)valInt;
             found = true;
         }
         else
         {
-            for (int i = 0; i < DFHack::tilespecial_count; i++)
+            if (!trySpecial(value, paint))
             {
-                if (val == DFHack::TileSpecialString[i])
-                {
-                    paint.special = (DFHack::TileSpecial) i;
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found)
-            {
-                std::cout << "Unknown tile special: " << value << std::endl;
+                out << "Unknown tile special: " << value << std::endl;
             }
         }
     }
     else if (option == "variant" || option == "var" || option == "v")
     {
-        if (valInt >= -1 && valInt <= DFHack::VAR_4)
+        if (is_valid_enum_item((df::tiletype_variant)valInt))
         {
-            paint.variant = (DFHack::TileVariant) valInt;
+            paint.variant = (df::tiletype_variant)valInt;
             found = true;
         }
         else
         {
-            std::cout << "Unknown tile variant: " << value << std::endl;
+            if (!tryVariant(value, paint))
+            {
+                out << "Unknown tile variant: " << value << std::endl;
+            }
         }
     }
     else if (option == "designated" || option == "d")
@@ -327,7 +550,7 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
         }
         else
         {
-            std::cout << "Unknown designation flag: " << value << std::endl;
+            out << "Unknown designation flag: " << value << std::endl;
         }
     }
     else if (option == "hidden" || option == "h")
@@ -339,7 +562,7 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
         }
         else
         {
-            std::cout << "Unknown hidden flag: " << value << std::endl;
+            out << "Unknown hidden flag: " << value << std::endl;
         }
     }
     else if (option == "light" || option == "l")
@@ -351,7 +574,7 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
         }
         else
         {
-            std::cout << "Unknown light flag: " << value << std::endl;
+            out << "Unknown light flag: " << value << std::endl;
         }
     }
     else if (option == "subterranean" || option == "st")
@@ -363,7 +586,7 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
         }
         else
         {
-            std::cout << "Unknown subterranean flag: " << value << std::endl;
+            out << "Unknown subterranean flag: " << value << std::endl;
         }
     }
     else if (option == "skyview" || option == "sv")
@@ -375,521 +598,373 @@ bool processTileType(TileType &paint, const std::string &option, const std::stri
         }
         else
         {
-            std::cout << "Unknown skyview flag: " << value << std::endl;
+            out << "Unknown skyview flag: " << value << std::endl;
         }
+    }
+    else if (option == "aquifer" || option == "aqua")
+    {
+        if (valInt >= -1 && valInt < 2)
+        {
+            paint.aquifer = valInt;
+            found = true;
+        }
+        else
+        {
+            out << "Unknown aquifer flag: " << value << std::endl;
+        }
+    }
+    else if (option == "all" || option == "a")
+    {
+        loc--;
+        for (; loc < end; loc++)
+        {
+            std::string param = params[loc];
+            toupper(param);
+
+            if (!(tryShape(param, paint) || tryMaterial(param, paint) ||
+                         trySpecial(param, paint) || tryVariant(param, paint)))
+            {
+                out << "Unknown description: '" << param << "'" << std::endl;
+                break;
+            }
+        }
+
+        found = true;
     }
     else
     {
-        std::cout << "Unknown option: '" << option << "'" << std::endl;
+        out << "Unknown option: '" << option << "'" << std::endl;
     }
 
     return found;
 }
 
-void help( std::ostream & out, const std::string &option)
+command_result executePaintJob(color_ostream &out)
 {
-    if (option.empty())
+    if (paint.empty())
     {
-        out << "Commands:" << std::endl
-            << " quit / q              : quit" << std::endl
-            << " filter / f [options]  : change filter options" << std::endl
-            << " paint / p [options]   : change paint options" << std::endl
-            << " point / p             : set point brush" << std::endl
-            << " range / r             : set range brush" << std::endl
-            << " block                 : set block brush" << std::endl
-            << " column                : set column brush" << std::endl
-            << std::endl
-            << "Filter/paint options:" << std::endl
-            << " Shape / sh / s: set tile shape information" << std::endl
-            << " Material / mat / m: set tile material information" << std::endl
-            << " Special / sp: set special tile information" << std::endl
-            << " Variant / var / v: set variant tile information" << std::endl
-            << " Designated / d: set designated flag" << std::endl
-            << " Hidden / h: set hidden flag" << std::endl
-            << " Light / l: set light flag" << std::endl
-            << " Subterranean / st: set subterranean flag" << std::endl
-            << " Skyview / sv: set skyview flag" << std::endl
-            << "See help [option] for more information" << std::endl;
+        out.printerr("Set the paint first.\n");
+        return CR_OK;
     }
-    else if (option == "shape" || option == "s" ||option == "sh")
-    {
-        out << "Available shapes:" << std::endl
-            << " ANY" << std::endl;
-        for (int i = 0; i < DFHack::tileshape_count; i++)
-        {
-            out << " " << DFHack::TileShapeString[i] << std::endl;
-        }
-    }
-    else if (option == "material"|| option == "mat" ||option == "m")
-    {
-        out << "Available materials:" << std::endl
-            << " ANY" << std::endl;
-        for (int i = 0; i < DFHack::tilematerial_count; i++)
-        {
-            out << " " << DFHack::TileMaterialString[i] << std::endl;
-        }
-    }
-    else if (option == "special" || option == "sp")
-    {
-        out << "Available specials:" << std::endl
-            << " ANY" << std::endl;
-        for (int i = 0; i < DFHack::tilespecial_count; i++)
-        {
-            out << " " << DFHack::TileSpecialString[i] << std::endl;
-        }
-    }
-    else if (option == "variant" || option == "var" || option == "v")
-    {
-        out << "Available variants:" << std::endl
-            << " ANY, 0 - " << DFHack::VAR_4 << std::endl;
-    }
-    else if (option == "designated" || option == "d")
-    {
-        out << "Available designated flags:" << std::endl
-            << " ANY, 0, 1" << std::endl;
-    }
-    else if (option == "hidden" || option == "h")
-    {
-        out << "Available hidden flags:" << std::endl
-            << " ANY, 0, 1" << std::endl;
-    }
-    else if (option == "light" || option == "l")
-    {
-        out << "Available light flags:" << std::endl
-            << " ANY, 0, 1" << std::endl;
-    }
-    else if (option == "subterranean" || option == "st")
-    {
-        out << "Available subterranean flags:" << std::endl
-            << " ANY, 0, 1" << std::endl;
-    }
-    else if (option == "skyview" || option == "sv")
-    {
-        out << "Available skyview flags:" << std::endl
-            << " ANY, 0, 1" << std::endl;
-    }
-}
 
-typedef std::vector<DFHack::DFCoord> coord_vec;
-
-class Brush
-{
-public:
-    virtual ~Brush() {};
-    virtual coord_vec points(MapExtras::MapCache &mc, DFHack::DFCoord start) = 0;
-};
-/**
- * generic 3D rectangle brush. you can specify the dimensions of
- * the rectangle and optionally which tile is its 'center'
- */
-class RectangleBrush : public Brush
-{
-    int x_, y_, z_;
-    int cx_, cy_, cz_;
-
-public:
-    RectangleBrush(int x, int y, int z = 1, int centerx = -1, int centery = -1, int centerz = -1)
-    {
-        if (centerx == -1)
-        {
-            cx_ = x/2;
-        }
-        else
-        {
-            cx_ = centerx;
-        }
-
-        if (centery == -1)
-        {
-            cy_ = y/2;
-        }
-        else
-        {
-            cy_ = centery;
-        }
-
-        if (centerz == -1)
-        {
-            cz_ = z/2;
-        }
-        else
-        {
-            cz_ = centerz;
-        }
-
-        x_ = x;
-        y_ = y;
-        z_ = z;
-    };
-
-    coord_vec points(MapExtras::MapCache &mc, DFHack::DFCoord start)
-    {
-        coord_vec v;
-        DFHack::DFCoord iterstart(start.x - cx_, start.y - cy_, start.z - cz_);
-        DFHack::DFCoord iter = iterstart;
-        for (int xi = 0; xi < x_; xi++)
-        {
-            for (int yi = 0; yi < y_; yi++)
-            {
-                for (int zi = 0; zi < z_; zi++)
-                {
-                    if(mc.testCoord(iter))
-                        v.push_back(iter);
-
-                    iter.z++;
-                }
-
-                iter.z = iterstart.z;
-                iter.y++;
-            }
-
-            iter.y = iterstart.y;
-            iter.x ++;
-        }
-
-        return v;
-    };
-
-    ~RectangleBrush(){};
-};
-
-/**
- * stupid block brush, legacy. use when you want to apply something to a whole DF map block.
- */
-class BlockBrush : public Brush
-{
-public:
-    BlockBrush() {};
-    ~BlockBrush() {};
-
-    coord_vec points(MapExtras::MapCache &mc, DFHack::DFCoord start)
-    {
-        coord_vec v;
-        DFHack::DFCoord blockc = start % 16;
-        DFHack::DFCoord iterc = blockc * 16;
-        if (!mc.testCoord(start))
-            return v;
-
-        for (int xi = 0; xi < 16; xi++)
-        {
-            for (int yi = 0; yi < 16; yi++)
-            {
-                v.push_back(iterc);
-                iterc.y++;
-            }
-            iterc.x++;
-        }
-
-        return v;
-    };
-};
-
-/**
- * Column from a position through open space tiles
- * example: create a column of magma
- */
-class ColumnBrush : public Brush
-{
-public:
-    ColumnBrush(){};
-
-    ~ColumnBrush(){};
-
-    coord_vec points(MapExtras::MapCache &mc, DFHack::DFCoord start)
-    {
-        coord_vec v;
-        bool juststarted = true;
-        while (mc.testCoord(start))
-        {
-            uint16_t tt = mc.tiletypeAt(start);
-            if(DFHack::LowPassable(tt) || juststarted && DFHack::HighPassable(tt))
-            {
-                v.push_back(start);
-                juststarted = false;
-                start.z++;
-            }
-            else break;
-        }
-        return v;
-    };
-};
-
-CommandHistory tiletypes_hist;
-
-DFhackCExport command_result df_tiletypes (Core * c, vector <string> & parameters);
-
-DFhackCExport const char * plugin_name ( void )
-{
-    return "tiletypes";
-}
-
-DFhackCExport command_result plugin_init ( Core * c, std::vector <PluginCommand> &commands)
-{
-    tiletypes_hist.load("tiletypes.history");
-    commands.clear();
-    commands.push_back(PluginCommand("tiletypes", "Paint map tiles freely, similar to liquids.", df_tiletypes, true));
-    return CR_OK;
-}
-
-DFhackCExport command_result plugin_shutdown ( Core * c )
-{
-    tiletypes_hist.save("tiletypes.history");
-    return CR_OK;
-}
-
-DFhackCExport command_result df_tiletypes (Core * c, vector <string> & parameters)
-{
+    CoreSuspender suspend;
     uint32_t x_max = 0, y_max = 0, z_max = 0;
     int32_t x = 0, y = 0, z = 0;
 
-    DFHack::Gui *gui;
-    for(int i = 0; i < parameters.size();i++)
+    if (!Maps::IsValid())
+    {
+        out.printerr("Map is not available!\n");
+        return CR_FAILURE;
+    }
+    Maps::getSize(x_max, y_max, z_max);
+
+    if (!Gui::getCursorCoords(x,y,z))
+    {
+        out.printerr("Can't get cursor coords! Make sure you have a cursor active in DF.\n");
+        return CR_FAILURE;
+    }
+    out.print("Cursor coords: (%d, %d, %d)\n", x, y, z);
+
+    DFHack::DFCoord cursor(x,y,z);
+    MapExtras::MapCache map;
+    coord_vec all_tiles = brush->points(map, cursor);
+    out.print("working...\n");
+
+    // Force the game to recompute its walkability cache
+    df::global::world->reindex_pathfinding = true;
+
+    for (coord_vec::iterator iter = all_tiles.begin(); iter != all_tiles.end(); ++iter)
+    {
+        const df::tiletype source = map.tiletypeAt(*iter);
+        df::tile_designation des = map.designationAt(*iter);
+
+        if (!filter.matches(source, des))
+        {
+            continue;
+        }
+
+        df::tiletype_shape shape = paint.shape;
+        if (shape == tiletype_shape::NONE)
+        {
+            shape = tileShape(source);
+        }
+
+        df::tiletype_material material = paint.material;
+        if (material == tiletype_material::NONE)
+        {
+            material = tileMaterial(source);
+        }
+
+        df::tiletype_special special = paint.special;
+        if (special == tiletype_special::NONE)
+        {
+            special = tileSpecial(source);
+        }
+        df::tiletype_variant variant = paint.variant;
+        /*
+         * FIXME: variant should be:
+         * 1. If user variant:
+         * 2.   If user variant \belongs target variants
+         * 3.     use user variant
+         * 4.   Else
+         * 5.     use variant 0
+         * 6. If the source variant \belongs target variants
+         * 7    use source variant
+         * 8  ElseIf num target shape/material variants > 1
+         * 9.   pick one randomly
+         * 10.Else
+         * 11.  use variant 0
+         *
+         * The following variant check has been disabled because it's severely limiting
+         * the usefullness of the tool.
+         */
+        /*
+        if (variant == tiletype_variant::NONE)
+        {
+            variant = tileVariant(source);
+        }
+        */
+        // Remove direction from directionless tiles
+        DFHack::TileDirection direction = tileDirection(source);
+        if (!(material == tiletype_material::RIVER || shape == tiletype_shape::BROOK_BED || shape == tiletype_shape::WALL && (material == tiletype_material::CONSTRUCTION || special == tiletype_special::SMOOTH)))
+        {
+            direction.whole = 0;
+        }
+
+        df::tiletype type = DFHack::findTileType(shape, material, variant, special, direction);
+        // hack for empty space
+        if (shape == tiletype_shape::EMPTY && material == tiletype_material::AIR && variant == tiletype_variant::VAR_1 && special == tiletype_special::NORMAL && direction.whole == 0)
+        {
+            type = tiletype::OpenSpace;
+        }
+        // make sure it's not invalid
+        if(type != tiletype::Void)
+            map.setTiletypeAt(*iter, type);
+
+        if (paint.hidden > -1)
+        {
+            des.bits.hidden = paint.hidden;
+        }
+
+        if (paint.light > -1)
+        {
+            des.bits.light = paint.light;
+        }
+
+        if (paint.subterranean > -1)
+        {
+            des.bits.subterranean = paint.subterranean;
+        }
+
+        if (paint.skyview > -1)
+        {
+            des.bits.outside = paint.skyview;
+        }
+
+        if (paint.aquifer > -1)
+        {
+            des.bits.water_table = paint.aquifer;
+        }
+
+        // Remove liquid from walls, etc
+        if (type != -1 && !DFHack::FlowPassable(type))
+        {
+            des.bits.flow_size = 0;
+            //des.bits.liquid_type = DFHack::liquid_water;
+            //des.bits.water_table = 0;
+            des.bits.flow_forbid = 0;
+            //des.bits.liquid_static = 0;
+            //des.bits.water_stagnant = 0;
+            //des.bits.water_salt = 0;
+        }
+
+        map.setDesignationAt(*iter, des);
+    }
+
+    if (map.WriteAll())
+    {
+        out.print("OK\n");
+        return CR_OK;
+    }
+    else
+    {
+        out.printerr("Something failed horribly! RUN!\n");
+        return CR_FAILURE;
+    }
+}
+
+command_result processCommand(color_ostream &out, std::vector<std::string> &commands, int start, int end, bool & endLoop, bool hasConsole = false)
+{
+    if (commands.size() == start)
+    {
+        return executePaintJob(out);
+    }
+
+    int loc = start;
+
+    std::string command = commands[loc++];
+    tolower(command);
+
+    if (command == "help" || command == "?")
+    {
+        help(out, commands, loc, end);
+    }
+    else if (command == "quit" || command == "q")
+    {
+        endLoop = true;
+    }
+    else if (command == "filter" || command == "f")
+    {
+        processTileType(out, filter, commands, loc, end);
+    }
+    else if (command == "paint" || (command == "p" && commands.size() > 1))
+    {
+        processTileType(out, paint, commands, loc, end);
+    }
+    else if (command == "point" || command == "p")
+    {
+        delete brush;
+        brush = new RectangleBrush(1,1);
+    }
+    else if (command == "range" || command == "r")
+    {
+        int width = 1, height = 1, zLevels = 1;
+
+        command_result res = parseRectangle(out, commands, loc, end,
+                                            width, height, zLevels, hasConsole);
+        if (res != CR_OK)
+        {
+            return res;
+        }
+
+        delete brush;
+        brush = new RectangleBrush(width, height, zLevels, 0, 0, 0);
+    }
+    else if (command == "block")
+    {
+        delete brush;
+        brush = new BlockBrush();
+    }
+    else if (command == "column")
+    {
+        delete brush;
+        brush = new ColumnBrush();
+    }
+    else if (command == "run" || command.empty())
+    {
+        executePaintJob(out);
+    }
+
+    return CR_OK;
+}
+
+command_result df_tiletypes (color_ostream &out_, vector <string> & parameters)
+{
+    for(size_t i = 0; i < parameters.size();i++)
     {
         if(parameters[i] == "help" || parameters[i] == "?")
         {
-            c->con.print("This tool allows painting tiles types with a brush, using an optional filter.\n"
-                         "The tool is interactive, similarly to the liquids tool.\n"
-                         "Further help is available inside.\n"
+            out_.print("This tool allows painting tiles types with a brush, using an optional filter.\n"
+                       "The tool is interactive, similarly to the liquids tool.\n"
+                       "Further help is available inside.\n"
             );
             return CR_OK;
         }
     }
 
-    TileType filter, paint;
-    Brush *brush = new RectangleBrush(1,1);
+    if(!out_.is_console())
+        return CR_FAILURE;
+    Console &out = static_cast<Console&>(out_);
+
+    std::vector<std::string> commands;
     bool end = false;
-    std::string brushname = "point";
-    int width = 1, height = 1, z_levels = 1;
-    c->con << "Welcome to the tiletype tool.\nType 'help' or '?' for a list of available commands, 'q' to quit.\nPress return after a command to confirm." << std::endl;
-    c->con.printerr("THIS TOOL CAN BE DANGEROUS. YOU'VE BEEN WARNED.\n");
+    out << "Welcome to the tiletype tool.\nType 'help' or '?' for a list of available commands, 'q' to quit.\nPress return after a command to confirm." << std::endl;
+    out.printerr("THIS TOOL CAN BE DANGEROUS. YOU'VE BEEN WARNED.\n");
     while (!end)
     {
-        c->con << "Filter: " << filter    << std::endl
-               << "Paint: "  << paint     << std::endl
-               << "Brush: "  << brushname << std::endl;
+        printState(out);
 
         std::string input = "";
-        std::string command = "";
-        std::string option = "";
-        std::string value = "";
 
-        c->con.lineedit("tiletypes> ",input,tiletypes_hist);
+        if (out.lineedit("tiletypes> ",input,tiletypes_hist) == -1)
+            return CR_FAILURE;
         tiletypes_hist.add(input);
-        std::istringstream ss(input);
-        ss >> command >> option >> value;
-        tolower(command);
-        tolower(option);
 
-        if (command == "help" || command == "?")
+        commands.clear();
+        Core::cheap_tokenise(input, commands);
+
+        command_result ret = processCommand(out, commands, 0, commands.size(), end, true);
+
+        if (ret != CR_OK)
         {
-            help(c->con,option);
-        }
-        else if (command == "quit" || command == "q")
-        {
-            end = true;
-        }
-        else if (command == "filter" || command == "f")
-        {
-            processTileType(filter, option, value);
-        }
-        else if (command == "paint" || (command == "p" && !option.empty()))
-        {
-            processTileType(paint, option, value);
-        }
-        else if (command == "point" || command == "p")
-        {
-            delete brush;
-            brushname = "point";
-            brush = new RectangleBrush(1,1);
-        }
-        else if (command == "range" || command == "r")
-        {
-            std::stringstream ss;
-            CommandHistory hist;
-            ss << "Set range width <" << width << "> ";
-            c->con.lineedit(ss.str(),command,hist);
-            width = command == "" ? width : toint(command);
-            if (width < 1) width = 1;
-
-            ss.str("");
-            ss << "Set range height <" << height << "> ";
-            c->con.lineedit(ss.str(),command,hist);
-            height = command == "" ? height : toint(command);
-            if (height < 1) height = 1;
-
-            ss.str("");
-            ss << "Set range z-levels <" << z_levels << "> ";
-            c->con.lineedit(ss.str(),command,hist);
-            z_levels = command == "" ? z_levels : toint(command);
-            if (z_levels < 1) z_levels = 1;
-
-            delete brush;
-            if (width == 1 && height == 1 && z_levels == 1)
-            {
-                brushname = "point";
-            }
-            else
-            {
-                brushname = "range";
-            }
-            brush = new RectangleBrush(width, height, z_levels, 0, 0, 0);
-        }
-        else if (command == "block")
-        {
-            delete brush;
-            brushname = "block";
-            brush = new BlockBrush();
-        }
-        else if (command == "column")
-        {
-            delete brush;
-            brushname = "column";
-            brush = new ColumnBrush();
-        }
-        else if (command.empty())
-        {
-            if (paint.empty())
-            {
-                c->con.printerr("Set the paint first.\n");
-                continue;
-            }
-
-            CoreSuspender suspend(c);
-            gui = c->getGui();
-            if (!Maps::IsValid())
-            {
-                c->con.printerr("Map is not available!\n");
-                return CR_FAILURE;
-            }
-            Maps::getSize(x_max, y_max, z_max);
-
-            if (!(gui->Start() && gui->getCursorCoords(x,y,z)))
-            {
-                c->con.printerr("Can't get cursor coords! Make sure you have a cursor active in DF.\n");
-                return CR_FAILURE;
-            }
-            c->con.print("Cursor coords: (%d, %d, %d)\n",x,y,z);
-
-            DFHack::DFCoord cursor(x,y,z);
-            MapExtras::MapCache map;
-            coord_vec all_tiles = brush->points(map, cursor);
-            c->con.print("working...\n");
-
-            for (coord_vec::iterator iter = all_tiles.begin(); iter != all_tiles.end(); ++iter)
-            {
-                const DFHack::TileRow *source = DFHack::getTileRow(map.tiletypeAt(*iter));
-                df::tile_designation des = map.designationAt(*iter);
-
-                if ((filter.shape > -1 && filter.shape != source->shape)
-                 || (filter.material > -1 && filter.material != source->material)
-                 || (filter.special > -1 && filter.special != source->special)
-                 || (filter.variant > -1 && filter.variant != source->variant)
-		 || (filter.dig > -1 && (filter.dig != 0) != (des.bits.dig != tile_dig_designation::No))
-                )
-                {
-                    continue;
-                }
-
-                DFHack::TileShape shape = paint.shape;
-                if (shape < 0)
-                {
-                    shape = source->shape;
-                }
-
-                DFHack::TileMaterial material = paint.material;
-                if (material < 0)
-                {
-                    material = source->material;
-                }
-
-                DFHack::TileSpecial special = paint.special;
-                if (special < 0)
-                {
-                    special = source->special;
-                }
-                DFHack::TileVariant variant = paint.variant;
-                /*
-                 * FIXME: variant should be:
-                 * 1. If user variant:
-                 * 2.   If user variant \belongs target variants
-                 * 3.     use user variant
-                 * 4.   Else
-                 * 5.     use variant 0
-                 * 6. If the source variant \belongs target variants
-                 * 7    use source variant
-                 * 8  ElseIf num target shape/material variants > 1
-                 * 9.   pick one randomly
-                 * 10.Else
-                 * 11.  use variant 0
-                 *
-                 * The following variant check has been disabled because it's severely limiting
-                 * the usefullness of the tool.
-                 */
-                /*
-                if (variant < 0)
-                {
-                    variant = source->variant;
-                }
-                */
-                // Remove direction from directionless tiles
-                DFHack::TileDirection direction = source->direction;
-                if (!(shape == DFHack::RIVER_BED || shape == DFHack::BROOK_BED || shape == DFHack::WALL && (material == DFHack::CONSTRUCTED || special == DFHack::TILE_SMOOTH))) {
-                    direction.whole = 0;
-                }
-
-                int32_t type = DFHack::findTileType(shape, material, variant, special, direction);
-                // hack for empty space
-                if (shape == DFHack::EMPTY && material == DFHack::AIR && variant == DFHack::VAR_1 && special == DFHack::TILE_NORMAL && direction.whole == 0) {
-                    type = 32;
-                }
-                // make sure it's not invalid
-                if(type != -1)
-                    map.setTiletypeAt(*iter, type);
-
-                if (paint.hidden > -1)
-                {
-                    des.bits.hidden = paint.hidden;
-                }
-
-                if (paint.light > -1)
-                {
-                    des.bits.light = paint.light;
-                }
-
-                if (paint.subterranean > -1)
-                {
-                    des.bits.subterranean = paint.subterranean;
-                }
-
-                if (paint.skyview > -1)
-                {
-                    des.bits.outside = paint.skyview;
-                }
-
-                // Remove liquid from walls, etc
-                if (type != -1 && !DFHack::FlowPassable(type))
-                {
-                    des.bits.flow_size = 0;
-                    //des.bits.liquid_type = DFHack::liquid_water;
-                    //des.bits.water_table = 0;
-                    des.bits.flow_forbid = 0;
-                    //des.bits.liquid_static = 0;
-                    //des.bits.water_stagnant = 0;
-                    //des.bits.water_salt = 0;
-                }
-
-                map.setDesignationAt(*iter, des);
-            }
-
-            if (map.WriteAll())
-            {
-                c->con.print("OK\n");
-            }
-            else
-            {
-                c->con.printerr("Something failed horribly! RUN!\n");
-            }
+            return ret;
         }
     }
     return CR_OK;
+}
+
+command_result df_tiletypes_command (color_ostream &out, vector <string> & parameters)
+{
+    bool dummy;
+    int start = 0, end = 0;
+
+    parameters.push_back(";");
+    for (size_t i = 0; i < parameters.size();i++)
+    {
+        if (parameters[i] == ";") {
+            command_result rv = processCommand(out, parameters, start, end, dummy);
+            if (rv != CR_OK) {
+                return rv;
+            }
+            end++;
+            start = end;
+        } else {
+            end++;
+        }
+    }
+
+    return CR_OK;
+}
+
+command_result df_tiletypes_here (color_ostream &out, vector <string> & parameters)
+{
+    for(size_t i = 0; i < parameters.size();i++)
+    {
+        if(parameters[i] == "help" || parameters[i] == "?")
+        {
+            out << "This command is supposed to be mapped to a hotkey." << endl;
+            out << "It will use the current/last parameters set in tiletypes (including brush settings!)." << endl;
+            return CR_OK;
+        }
+    }
+
+    out.print("Run tiletypes-here with these parameters: ");
+    printState(out);
+
+    return executePaintJob(out);
+}
+
+command_result df_tiletypes_here_point (color_ostream &out, vector <string> & parameters)
+{
+    for(size_t i = 0; i < parameters.size();i++)
+    {
+        if(parameters[i] == "help" || parameters[i] == "?")
+        {
+            out << "This command is supposed to be mapped to a hotkey." << endl;
+            out << "It will use the current/last parameters set in tiletypes (except with a point brush)." << endl;
+            return CR_OK;
+        }
+    }
+
+    Brush *old = brush;
+    brush = new RectangleBrush(1, 1);
+
+    out.print("Run tiletypes-here with these parameters: ");
+    printState(out);
+
+    command_result rv = executePaintJob(out);
+
+    delete brush;
+    brush = old;
+    return rv;
 }

@@ -39,20 +39,16 @@ using df::global::job_next_id;
 
 /* Plugin registration */
 
-static bool job_material_hotkey(Core *c, df::viewscreen *top);
+static bool job_material_hotkey(df::viewscreen *top);
 
-static command_result job_material(Core *c, vector <string> & parameters);
-static command_result job_duplicate(Core *c, vector <string> & parameters);
-static command_result job_cmd(Core *c, vector <string> & parameters);
+static command_result job_material(color_ostream &out, vector <string> & parameters);
+static command_result job_duplicate(color_ostream &out, vector <string> & parameters);
+static command_result job_cmd(color_ostream &out, vector <string> & parameters);
 
-DFhackCExport const char * plugin_name ( void )
+DFHACK_PLUGIN("jobutils");
+
+DFhackCExport command_result plugin_init (color_ostream &out, std::vector <PluginCommand> &commands)
 {
-    return "jobutils";
-}
-
-DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &commands)
-{
-    commands.clear();
     if (!world || !ui)
         return CR_FAILURE;
 
@@ -61,9 +57,10 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
             "job", "General job query and manipulation.",
             job_cmd, false,
             "  job [query]\n"
-            "    Print details of the current job.\n"
+            "    Print details of the current job. The job can be\n"
+            "    selected in a workshop, or the unit/jobs screen.\n"
             "  job list\n"
-            "    Print details of all jobs in the workshop.\n"
+            "    Print details of all jobs in the selected workshop.\n"
             "  job item-material <item-idx> <material[:subtoken]>\n"
             "    Replace the exact material id in the job item.\n"
             "  job item-type <item-idx> <type[:subtype]>\n"
@@ -79,7 +76,8 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
                 "  job-material <inorganic-token>\n"
                 "Intended to be used as a keybinding:\n"
                 "  - In 'q' mode, when a job is highlighted within a workshop\n"
-                "    or furnace, changes the material of the job.\n"
+                "    or furnace, changes the material of the job. Only inorganic\n"
+                "    materials can be used in this mode.\n"
                 "  - In 'b' mode, during selection of building components\n"
                 "    positions the cursor over the first available choice\n"
                 "    with the matching material.\n"
@@ -91,7 +89,7 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
         commands.push_back(
             PluginCommand(
                 "job-duplicate", "Duplicate the selected job in a workshop.",
-                job_duplicate, workshop_job_hotkey,
+                job_duplicate, Gui::workshop_job_hotkey,
                 "  - In 'q' mode, when a job is highlighted within a workshop\n"
                 "    or furnace building, instantly duplicates the job.\n"
             )
@@ -101,31 +99,31 @@ DFhackCExport command_result plugin_init (Core *c, std::vector <PluginCommand> &
     return CR_OK;
 }
 
-DFhackCExport command_result plugin_shutdown ( Core * c )
+DFhackCExport command_result plugin_shutdown ( color_ostream &out )
 {
     return CR_OK;
 }
 
 /* UI state guards */
 
-static bool job_material_hotkey(Core *c, df::viewscreen *top)
+static bool job_material_hotkey(df::viewscreen *top)
 {
-    return workshop_job_hotkey(c, top) ||
-           build_selector_hotkey(c, top);
+    return Gui::workshop_job_hotkey(top) ||
+           Gui::build_selector_hotkey(top);
 }
 
 /* job-material implementation */
 
-static command_result job_material_in_job(Core *c, MaterialInfo &new_mat)
+static command_result job_material_in_job(color_ostream &out, MaterialInfo &new_mat)
 {
-    df::job *job = getSelectedWorkshopJob(c);
+    df::job *job = Gui::getSelectedWorkshopJob(out);
     if (!job)
         return CR_FAILURE;
 
     if (!new_mat.isValid() || new_mat.type != 0)
     {
-        c->con.printerr("New job material isn't inorganic: %s\n",
-                        new_mat.toString().c_str());
+        out.printerr("New job material isn't inorganic: %s\n",
+                     new_mat.toString().c_str());
         return CR_FAILURE;
     }
 
@@ -133,41 +131,41 @@ static command_result job_material_in_job(Core *c, MaterialInfo &new_mat)
 
     if (!cur_mat.isValid() || cur_mat.type != 0)
     {
-        c->con.printerr("Current job material isn't inorganic: %s\n",
-                        cur_mat.toString().c_str());
+        out.printerr("Current job material isn't inorganic: %s\n",
+                     cur_mat.toString().c_str());
         return CR_FAILURE;
     }
 
     df::craft_material_class old_class = cur_mat.getCraftClass();
     if (old_class == craft_material_class::None)
     {
-        c->con.printerr("Unexpected current material type: %s\n",
-                        cur_mat.toString().c_str());
+        out.printerr("Unexpected current material type: %s\n",
+                     cur_mat.toString().c_str());
         return CR_FAILURE;
     }
     if (new_mat.getCraftClass() != old_class)
     {
-        c->con.printerr("New material %s does not satisfy requirement: %s\n",
-                        new_mat.toString().c_str(), ENUM_KEY_STR(craft_material_class, old_class));
+        out.printerr("New material %s does not satisfy requirement: %s\n",
+                     new_mat.toString().c_str(), ENUM_KEY_STR(craft_material_class, old_class).c_str());
         return CR_FAILURE;
     }
 
-    for (unsigned i = 0; i < job->job_items.size(); i++)
+    for (size_t i = 0; i < job->job_items.size(); i++)
     {
         df::job_item *item = job->job_items[i];
         MaterialInfo item_mat(item);
 
         if (item_mat != cur_mat)
         {
-            c->con.printerr("Job item %d has different material: %s\n",
-                            i, item_mat.toString().c_str());
+            out.printerr("Job item %d has different material: %s\n",
+                         i, item_mat.toString().c_str());
             return CR_FAILURE;
         }
 
         if (!new_mat.matches(*item))
         {
-            c->con.printerr("Job item %d requirements not satisfied by %s.\n",
-                            i, new_mat.toString().c_str());
+            out.printerr("Job item %d requirements not satisfied by %s.\n",
+                         i, new_mat.toString().c_str());
             return CR_FAILURE;
         }
     }
@@ -176,15 +174,15 @@ static command_result job_material_in_job(Core *c, MaterialInfo &new_mat)
     job->mat_type = new_mat.type;
     job->mat_index = new_mat.index;
 
-    for (unsigned i = 0; i < job->job_items.size(); i++)
+    for (size_t i = 0; i < job->job_items.size(); i++)
     {
         df::job_item *item = job->job_items[i];
         item->mat_type = new_mat.type;
         item->mat_index = new_mat.index;
     }
 
-    c->con << "Applied material '" << new_mat.toString()
-           << "' to job " << ENUM_KEY_STR(job_type,job->job_type) << endl;
+    out << "Applied material '" << new_mat.toString()
+        << "' to job " << ENUM_KEY_STR(job_type,job->job_type) << endl;
     return CR_OK;
 }
 
@@ -195,7 +193,7 @@ static bool build_choice_matches(df::ui_build_item_req *req, df::build_req_choic
     {
         if (gen->mat_type == new_mat.type &&
             gen->mat_index == new_mat.index &&
-            (ignore_select || gen->used_count < gen->candidates.size()))
+            (ignore_select || size_t(gen->used_count) < gen->candidates.size()))
         {
             return true;
         }
@@ -214,7 +212,7 @@ static bool build_choice_matches(df::ui_build_item_req *req, df::build_req_choic
     return false;
 }
 
-static command_result job_material_in_build(Core *c, MaterialInfo &new_mat)
+static command_result job_material_in_build(color_ostream &out, MaterialInfo &new_mat)
 {
     df::ui_build_selector *sel = ui_build_selector;
     df::ui_build_item_req *req = sel->requirements[ui_build_selector->req_index];
@@ -222,10 +220,10 @@ static command_result job_material_in_build(Core *c, MaterialInfo &new_mat)
     // Loop through matching choices
     bool matches = build_choice_matches(req, sel->choices[sel->sel_index], new_mat, true);
 
-    int size = sel->choices.size();
+    size_t size = sel->choices.size();
     int base = (matches ? sel->sel_index + 1 : 0);
 
-    for (unsigned i = 0; i < size; i++)
+    for (size_t i = 0; i < size; i++)
     {
         int idx = (base + i) % size;
 
@@ -236,11 +234,11 @@ static command_result job_material_in_build(Core *c, MaterialInfo &new_mat)
         }
     }
 
-    c->con.printerr("Could not find material in list: %s\n", new_mat.toString().c_str());
+    out.printerr("Could not find material in list: %s\n", new_mat.toString().c_str());
     return CR_FAILURE;
 }
 
-static command_result job_material(Core * c, vector <string> & parameters)
+static command_result job_material(color_ostream &out, vector <string> & parameters)
 {
     // HOTKEY COMMAND: CORE ALREADY SUSPENDED
 
@@ -248,7 +246,7 @@ static command_result job_material(Core * c, vector <string> & parameters)
     if (parameters.size() == 1)
     {
         if (!new_mat.find(parameters[0])) {
-            c->con.printerr("Could not find material: %s\n", parameters[0].c_str());
+            out.printerr("Could not find material: %s\n", parameters[0].c_str());
             return CR_WRONG_USAGE;
         }
     }
@@ -256,44 +254,44 @@ static command_result job_material(Core * c, vector <string> & parameters)
         return CR_WRONG_USAGE;
 
     if (ui->main.mode == ui_sidebar_mode::QueryBuilding)
-        return job_material_in_job(c, new_mat);
+        return job_material_in_job(out, new_mat);
     if (ui->main.mode == ui_sidebar_mode::Build)
-        return job_material_in_build(c, new_mat);
+        return job_material_in_build(out, new_mat);
 
     return CR_WRONG_USAGE;
 }
 
 /* job-duplicate implementation */
 
-static command_result job_duplicate(Core * c, vector <string> & parameters)
+static command_result job_duplicate(color_ostream &out, vector <string> & parameters)
 {
     if (!parameters.empty())
         return CR_WRONG_USAGE;
 
-    df::job *job = getSelectedWorkshopJob(c);
+    df::job *job = Gui::getSelectedWorkshopJob(out);
     if (!job)
         return CR_FAILURE;
 
-    if (!job->misc_links.empty() ||
+    if (!job->specific_refs.empty() ||
         (job->job_items.empty() &&
          job->job_type != job_type::CollectSand &&
          job->job_type != job_type::CollectClay))
     {
-        c->con.printerr("Cannot duplicate job %s\n", ENUM_KEY_STR(job_type,job->job_type));
+        out.printerr("Cannot duplicate job %s\n", ENUM_KEY_STR(job_type,job->job_type).c_str());
         return CR_FAILURE;
     }
 
     df::building *building = world->selected_building;
     if (building->jobs.size() >= 10)
     {
-        c->con.printerr("Job list is already full.\n");
+        out.printerr("Job list is already full.\n");
         return CR_FAILURE;
     }
 
     // Actually clone
-    df::job *pnew = cloneJobStruct(job);
+    df::job *pnew = Job::cloneJobStruct(job);
 
-    linkJobIntoWorld(pnew);
+    Job::linkIntoWorld(pnew);
     vector_insert_at(building->jobs, ++*ui_workshop_job_cursor, pnew);
 
     return CR_OK;
@@ -301,37 +299,40 @@ static command_result job_duplicate(Core * c, vector <string> & parameters)
 
 /* Main job command implementation */
 
-static df::job_item *getJobItem(Core *c, df::job *job, std::string idx)
+static df::job_item *getJobItem(color_ostream &out, df::job *job, std::string idx)
 {
     if (!job)
         return NULL;
 
     int v = atoi(idx.c_str());
-    if (v < 1 || v > job->job_items.size()) {
-        c->con.printerr("Invalid item index.\n");
+    if (v < 1 || size_t(v) > job->job_items.size()) {
+        out.printerr("Invalid item index.\n");
         return NULL;
     }
 
     return job->job_items[v-1];
 }
 
-static command_result job_cmd(Core * c, vector <string> & parameters)
+static command_result job_cmd(color_ostream &out, vector <string> & parameters)
 {
-    CoreSuspender suspend(c);
+    CoreSuspender suspend;
 
     std::string cmd = (parameters.empty() ? "query" : parameters[0]);
     if (cmd == "query" || cmd == "list")
     {
-        df::job *job = getSelectedWorkshopJob(c);
+        df::job *job = Gui::getSelectedJob(out);
         if (!job)
             return CR_WRONG_USAGE;
 
         if (cmd == "query") {
-            printJobDetails(c, job);
+            Job::printJobDetails(out, job);
         } else {
+            if (!Gui::workshop_job_hotkey(Core::getTopViewscreen()))
+                return CR_WRONG_USAGE;
+
             df::building *selected = world->selected_building;
-            for (unsigned i = 0; i < selected->jobs.size(); i++)
-                printJobDetails(c, selected->jobs[i]);
+            for (size_t i = 0; i < selected->jobs.size(); i++)
+                Job::printJobDetails(out, selected->jobs[i]);
         }
     }
     else if (cmd == "item-material")
@@ -339,8 +340,8 @@ static command_result job_cmd(Core * c, vector <string> & parameters)
         if (parameters.size() != 3)
             return CR_WRONG_USAGE;
 
-        df::job *job = getSelectedWorkshopJob(c);
-        df::job_item *item = getJobItem(c, job, parameters[1]);
+        df::job *job = Gui::getSelectedJob(out);
+        df::job_item *item = getJobItem(out, job, parameters[1]);
         if (!item)
             return CR_WRONG_USAGE;
 
@@ -348,13 +349,13 @@ static command_result job_cmd(Core * c, vector <string> & parameters)
         MaterialInfo minfo;
 
         if (!minfo.find(parameters[2])) {
-            c->con.printerr("Could not find the specified material.\n");
+            out.printerr("Could not find the specified material.\n");
             return CR_FAILURE;
         }
 
         if (minfo.isValid() && !iinfo.matches(*item, &minfo)) {
-            c->con.printerr("Material does not match the requirements.\n");
-            printJobDetails(c, job);
+            out.printerr("Material does not match the requirements.\n");
+            Job::printJobDetails(out, job);
             return CR_FAILURE;
         }
 
@@ -369,13 +370,13 @@ static command_result job_cmd(Core * c, vector <string> & parameters)
         item->mat_type = minfo.type;
         item->mat_index = minfo.index;
 
-        c->con << "Job item updated." << endl;
+        out << "Job item updated." << endl;
 
         if (item->item_type < 0 && minfo.isValid())
-            c->con.printerr("WARNING: Due to a probable bug, creature & plant material subtype\n"
+            out.printerr("WARNING: Due to a probable bug, creature & plant material subtype\n"
                             "         is ignored unless the item type is also specified.\n");
 
-        printJobDetails(c, job);
+        Job::printJobDetails(out, job);
         return CR_OK;
     }
     else if (cmd == "item-type")
@@ -383,8 +384,8 @@ static command_result job_cmd(Core * c, vector <string> & parameters)
         if (parameters.size() != 3)
             return CR_WRONG_USAGE;
 
-        df::job *job = getSelectedWorkshopJob(c);
-        df::job_item *item = getJobItem(c, job, parameters[1]);
+        df::job *job = Gui::getSelectedJob(out);
+        df::job_item *item = getJobItem(out, job, parameters[1]);
         if (!item)
             return CR_WRONG_USAGE;
 
@@ -392,21 +393,21 @@ static command_result job_cmd(Core * c, vector <string> & parameters)
         MaterialInfo minfo(item);
 
         if (!iinfo.find(parameters[2])) {
-            c->con.printerr("Could not find the specified item type.\n");
+            out.printerr("Could not find the specified item type.\n");
             return CR_FAILURE;
         }
 
         if (iinfo.isValid() && !iinfo.matches(*item, &minfo)) {
-            c->con.printerr("Item type does not match the requirements.\n");
-            printJobDetails(c, job);
+            out.printerr("Item type does not match the requirements.\n");
+            Job::printJobDetails(out, job);
             return CR_FAILURE;
         }
 
         item->item_type = iinfo.type;
         item->item_subtype = iinfo.subtype;
 
-        c->con << "Job item updated." << endl;
-        printJobDetails(c, job);
+        out << "Job item updated." << endl;
+        Job::printJobDetails(out, job);
         return CR_OK;
     }
     else

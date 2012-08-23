@@ -7,8 +7,8 @@
 #include <MemAccess.h>
 #include "luamain.h"
 #include "OutFile.h"
-#include "bit.h"
 #include "functioncall.h"
+#include "LuaTools.h"
 
 namespace lua
 {
